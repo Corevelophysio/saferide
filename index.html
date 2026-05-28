@@ -2339,29 +2339,57 @@ const isHighTraffic = traffic === 'high';
 const isModTraffic  = traffic === 'moderate';
 
 try {
-let waypointStr;
+const p2pSpeed = ({ low: 15, moderate: 13, high: 11 })[traffic] || CYCLING_SPEED_KMH;
+let route = null;
 
-if (isHighTraffic) {
-const midLat        = (start.lat + end.lat) / 2;
-const midLng        = (start.lng + end.lng) / 2;
-const directBearing = Math.atan2(end.lng - start.lng, end.lat - start.lat) * 180 / Math.PI;
-const perpBearing   = (directBearing + 90 + 360) % 360;
-const distKm        = haversineKm(start.lat, start.lng, end.lat, end.lng);
-const mid           = destinationPoint(midLat, midLng, perpBearing, distKm * 0.18);
-waypointStr = `${start.lng},${start.lat};${mid.lng},${mid.lat};${end.lng},${end.lat}`;
-} else {
-waypointStr = `${start.lng},${start.lat};${end.lng},${end.lat}`;
+// ── 1. Try ORS — prefers quiet/green residential roads ───────────────────
+try {
+  const orsResp = await fetch('/api/ors-p2p', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      start: [start.lng, start.lat],
+      end:   [end.lng,   end.lat],
+      traffic,
+    }),
+  });
+  if (orsResp.ok) {
+    const orsData = await orsResp.json();
+    const feature = orsData.features?.[0];
+    if (feature) {
+      const distKm = feature.properties.summary.distance / 1000;
+      route = {
+        geometry: feature.geometry,
+        distance: feature.properties.summary.distance,
+        duration: (distKm / p2pSpeed) * 3600,
+        legs: [],
+      };
+    }
+  }
+} catch (_) { /* ORS unavailable — fall through to OSRM */ }
+
+// ── 2. Fall back to OSRM if ORS failed ───────────────────────────────────
+if (!route) {
+  let waypointStr;
+  if (isHighTraffic) {
+    const midLat        = (start.lat + end.lat) / 2;
+    const midLng        = (start.lng + end.lng) / 2;
+    const directBearing = Math.atan2(end.lng - start.lng, end.lat - start.lat) * 180 / Math.PI;
+    const perpBearing   = (directBearing + 90 + 360) % 360;
+    const distKm        = haversineKm(start.lat, start.lng, end.lat, end.lng);
+    const mid           = destinationPoint(midLat, midLng, perpBearing, distKm * 0.18);
+    waypointStr = `${start.lng},${start.lat};${mid.lng},${mid.lat};${end.lng},${end.lat}`;
+  } else {
+    waypointStr = `${start.lng},${start.lat};${end.lng},${end.lat}`;
+  }
+  const url = `https://router.project-osrm.org/route/v1/bicycle/${waypointStr}` +
+    `?overview=full&geometries=geojson&alternatives=true&steps=true`;
+  const data = await fetch(url).then(r => r.json());
+  if (!data.routes?.length) throw new Error('No route found');
+  route = data.routes[0];
+  route.duration = (route.distance / 1000 / p2pSpeed) * 3600;
 }
 
-const url = `https://router.project-osrm.org/route/v1/bicycle/${waypointStr}` +
-`?overview=full&geometries=geojson&alternatives=true&steps=true`;
-
-const data = await fetch(url).then(r => r.json());
-if (!data.routes || !data.routes.length) throw new Error('No route');
-// Override OSRM duration with leisure cycling speed (OSRM uses athletic pace)
-const p2pSpeed = ({ low: 15, moderate: 13, high: 11 })[traffic] || CYCLING_SPEED_KMH;
-const route = data.routes[0];
-route.duration = (route.distance / 1000 / p2pSpeed) * 3600;
 displayRoute(route);
 addToHistory(route, 'p2p');
 fetchAndRenderElevation(route.geometry.coordinates.map(([lng, lat]) => [lat, lng]));
