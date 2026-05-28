@@ -25,17 +25,13 @@ module.exports = async (req, res) => {
     return res.status(400).json({ error: 'Invalid parameters — need start and end as [lng, lat]' });
   }
 
-  // Increase quiet weighting in heavy traffic to push harder onto residential streets
-  const quietW = traffic === 'high' ? 0.5 : traffic === 'moderate' ? 0.4 : 0.3;
-
+  // ORS v9+ cycling-regular: profile_params removed, highways/tollways not valid avoid_features.
+  // Use 'recommended' preference which routes on cycling-appropriate roads by default.
   const orsBody = {
     coordinates: [start, end],
     preference: 'recommended',
-    profile_params: {
-      weightings: { green: 0.6, quiet: quietW },
-    },
     options: {
-      avoid_features: ['highways', 'tollways', 'ferries', 'fords', 'steps'],
+      avoid_features: ['ferries', 'fords', 'steps'],
     },
   };
 

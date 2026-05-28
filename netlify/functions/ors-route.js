@@ -36,21 +36,17 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers, body: JSON.stringify({ error: 'Invalid parameters' }) };
   }
 
+  // ORS v9+ cycling-regular: profile_params removed, highways/tollways not valid avoid_features.
   const orsBody = {
     coordinates,
     preference: 'recommended',
-    // Prefer green (parks/residential) and quieter routes over commercial zones
-    profile_params: {
-      weightings: { green: 0.6, quiet: 0.3 },
-    },
     options: {
       round_trip: {
         length: Math.round(length),
         points: 3,
         seed: typeof seed === 'number' ? seed : 0,
       },
-      // Avoid motorways, toll roads, and other cyclist-hostile features
-      avoid_features: ['highways', 'tollways', 'ferries', 'fords', 'steps'],
+      avoid_features: ['ferries', 'fords', 'steps'],
     },
   };
 
