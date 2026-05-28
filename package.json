@@ -1,0 +1,8 @@
+{
+  "name": "saferide",
+  "version": "1.0.0",
+  "description": "SafeRide — Cycling Safety PWA",
+  "dependencies": {
+    "stripe": "^16.0.0"
+  }
+}

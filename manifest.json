@@ -1,0 +1,15 @@
+{
+  "name": "SafeRide – Safe Cycling Routes",
+  "short_name": "SafeRide",
+  "description": "Real-time safe cycling routes, dog hazard alerts, bike paths, and community-saved routes.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "categories": ["sports", "navigation", "lifestyle"],
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

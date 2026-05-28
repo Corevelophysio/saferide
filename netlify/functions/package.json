@@ -1,0 +1,8 @@
+{
+  "name": "saferide-functions",
+  "version": "1.0.0",
+  "description": "Netlify serverless functions for SafeRide",
+  "dependencies": {
+    "stripe": "^16.0.0"
+  }
+}

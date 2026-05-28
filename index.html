@@ -1,0 +1,3806 @@
+<!DOCTYPE html>
+<!-- © 2025 Corevel Physio. SafeRide is proprietary software. All rights reserved.
+     Unauthorised copying, distribution or modification is strictly prohibited. -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="author" content="Corevel Physio" />
+  <meta name="copyright" content="© 2025 Corevel Physio. All rights reserved." />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>SafeRide – Safe Cycling Routes</title>
+
+  <!-- PWA manifest -->
+  <link rel="manifest" href="/manifest.json" />
+
+  <!-- iOS Safari PWA support -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="SafeRide" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
+
+  <!-- Theme colour (Android Chrome toolbar) -->
+  <meta name="theme-color" content="#0f172a" />
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Leaflet Routing Machine (OSRM) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+  <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+  <!-- Leaflet PolylineDecorator – direction arrows -->
+  <script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
+  <!-- Turf.js for geospatial calculations -->
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+
+  <style>
+    :root {
+      --green:  #22c55e;
+      --yellow: #f59e0b;
+      --red:    #ef4444;
+      --bg:     #0f172a;
+      --panel:  #1e293b;
+      --border: #334155;
+      --text:   #f1f5f9;
+      --muted:  #94a3b8;
+      --accent: #38bdf8;
+
+      /* iOS safe-area insets (all zero on non-notch devices) */
+      --sat: env(safe-area-inset-top,    0px);
+      --sar: env(safe-area-inset-right,  0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+      --sal: env(safe-area-inset-left,   0px);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      /* top pad grows to cover iOS status bar when in standalone mode */
+      padding: calc(10px + var(--sat)) calc(16px + var(--sar)) 10px calc(16px + var(--sal));
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+      z-index: 1000;
+    }
+    header .logo-svg { display: block; flex-shrink: 0; }
+    header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+    header h1 span { color: var(--accent); }
+    .traffic-badge {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 99px;
+      font-size: 12px;
+      font-weight: 600;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid var(--border);
+    }
+    .traffic-badge .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.6; transform: scale(0.85); }
+    }
+
+    /* ── Layout ── */
+    .workspace {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      width: 340px;
+      min-width: 280px;
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex-shrink: 0;
+      transition: transform 0.3s ease;
+    }
+    #sidebar.collapsed { transform: translateX(-100%); position: absolute; }
+
+    .sidebar-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* ── Map ── */
+    #map {
+      flex: 1;
+      position: relative;
+    }
+    .leaflet-routing-container { display: none !important; }
+
+    /* ── Cards ── */
+    .card {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .card-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    /* ── Premium feature tiles ── */
+    .premium-feature-tile {
+      background: rgba(56,189,248,0.06);
+      border: 1px solid rgba(56,189,248,0.15);
+      border-radius: 8px;
+      padding: 10px 10px 8px;
+      text-align: center;
+    }
+    .pft-icon { font-size: 20px; margin-bottom: 4px; }
+    .pft-name { font-size: 11px; font-weight: 700; color: var(--text); margin-bottom: 3px; }
+    .pft-desc { font-size: 10px; color: var(--muted); line-height: 1.4; }
+
+    /* ── Form controls ── */
+    label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+    input[type="text"] {
+      width: 100%;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input[type="text"]:focus { border-color: var(--accent); }
+    input[type="text"]::placeholder { color: var(--muted); }
+
+    .input-group { margin-bottom: 10px; position: relative; }
+    .input-group .prefix {
+      position: absolute;
+      left: 9px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 14px;
+      pointer-events: none;
+    }
+    .input-group input { padding-left: 28px; }
+
+    /* ── Range slider ── */
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    input[type="range"] {
+      flex: 1;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .slider-val {
+      min-width: 52px;
+      text-align: right;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    /* ── Buttons ── */
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #0f172a; }
+    .btn-secondary {
+      background: rgba(255,255,255,0.07);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-danger { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
+    .btn-dog {
+      background: rgba(251,191,36,0.12);
+      color: #fbbf24;
+      border: 1px solid rgba(251,191,36,0.3);
+    }
+    .btn-dog.active {
+      background: rgba(251,191,36,0.25);
+      border-color: #fbbf24;
+    }
+
+    .budget-pill {
+      margin-top: 6px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      display: none;
+    }
+
+    /* ── Bike paths card ── */
+    .bp-loading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      padding: 6px 0;
+    }
+    .bp-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .bp-item:last-child { border-bottom: none; }
+    .bp-icon { font-size: 17px; flex-shrink: 0; margin-top: 1px; }
+    .bp-info { flex: 1; min-width: 0; }
+    .bp-name {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .bp-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .bp-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 99px;
+    }
+    .bp-cycleway { background: rgba(56,189,248,0.15);  color: #38bdf8; }
+    .bp-trail    { background: rgba(34,197,94,0.15);   color: #22c55e; }
+    .bp-footway  { background: rgba(168,85,247,0.15);  color: #a855f7; }
+    .bp-track    { background: rgba(245,158,11,0.15);  color: #f59e0b; }
+    .bp-dist     { font-size: 11px; color: var(--muted); }
+    .bp-more     { font-size: 11px; color: var(--muted); text-align: center; padding-top: 6px; }
+    .bp-map-note {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 10px;
+      padding: 7px 9px;
+      background: rgba(56,189,248,0.07);
+      border-radius: 6px;
+      font-size: 11px;
+      color: var(--accent);
+    }
+
+    /* ── Community routes ── */
+    .cr-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+    .cr-tab {
+      flex: 1; padding: 6px; border: none; border-radius: 6px;
+      background: transparent; color: var(--muted);
+      font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.15s;
+    }
+    .cr-tab.active { background: rgba(255,255,255,0.09); color: var(--text); }
+    .cr-item {
+      display: flex; align-items: flex-start; gap: 9px;
+      padding: 10px 0; border-bottom: 1px solid var(--border);
+      cursor: pointer; transition: opacity 0.15s;
+    }
+    .cr-item:last-child { border-bottom: none; }
+    .cr-item:hover { opacity: 0.75; }
+    .cr-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 3px; }
+    .cr-body { flex: 1; min-width: 0; }
+    .cr-name { font-size: 13px; font-weight: 700; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cr-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-bottom: 3px; }
+    .cr-chip {
+      font-size: 10px; padding: 2px 7px; border-radius: 99px;
+      background: rgba(255,255,255,0.06); border: 1px solid var(--border); color: var(--muted);
+    }
+    .cr-stats { font-size: 11px; color: var(--muted); }
+    .cr-note { font-size: 11px; color: var(--muted); font-style: italic; margin-top: 3px; line-height: 1.4; }
+    .cr-like { display: flex; flex-direction: column; align-items: center; gap: 2px; flex-shrink: 0; }
+    .cr-like-btn { background: none; border: none; cursor: pointer; font-size: 18px; padding: 0; line-height: 1; transition: transform 0.15s; }
+    .cr-like-btn:hover { transform: scale(1.25); }
+    .cr-like-btn.liked { filter: drop-shadow(0 0 5px rgba(239,68,68,0.7)); }
+    .cr-like-count { font-size: 10px; color: var(--muted); }
+    .cr-mine-badge {
+      font-size: 10px; padding: 2px 7px; border-radius: 99px;
+      background: rgba(168,85,247,0.15); color: #a855f7; border: 1px solid rgba(168,85,247,0.3);
+    }
+    .cr-empty { text-align: center; padding: 16px 0; }
+    .cr-empty-icon { font-size: 28px; margin-bottom: 6px; }
+    .cr-empty-text { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+    /* ── Feature chips ── */
+    .feature-chips {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .feature-chip {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 99px;
+      background: rgba(56,189,248,0.08);
+      border: 1px solid rgba(56,189,248,0.2);
+      color: var(--accent);
+    }
+
+    /* ── Safety Score ── */
+    .score-ring-wrap {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin: 4px 0 10px;
+    }
+    .score-ring {
+      position: relative;
+      width: 64px;
+      height: 64px;
+      flex-shrink: 0;
+    }
+    .score-ring svg { transform: rotate(-90deg); }
+    .score-ring .score-num {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: 800;
+    }
+    .score-details { flex: 1; }
+    .score-label { font-size: 15px; font-weight: 700; margin-bottom: 2px; }
+    .score-desc { font-size: 11px; color: var(--muted); line-height: 1.4; }
+
+    /* ── Traffic legend ── */
+    .legend-rows { display: flex; flex-direction: column; gap: 6px; }
+    .legend-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    .legend-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .legend-sub { color: var(--muted); font-size: 11px; margin-left: auto; }
+
+    /* ── Dog hazard list ── */
+    .hazard-list { display: flex; flex-direction: column; gap: 6px; }
+    .hazard-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+    .hazard-item .hicon { font-size: 18px; flex-shrink: 0; }
+    .hazard-item .hname { font-weight: 600; margin-bottom: 2px; }
+    .hazard-item .hnotes { color: var(--muted); }
+    .hazard-sev {
+      margin-left: auto;
+      padding: 2px 7px;
+      border-radius: 99px;
+      font-size: 10px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .sev-low  { background: rgba(34,197,94,0.15);  color: var(--green); }
+    .sev-med  { background: rgba(245,158,11,0.15); color: var(--yellow); }
+    .sev-high { background: rgba(239,68,68,0.15);  color: var(--red); }
+
+    .hazard-del {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 0;
+      margin-left: 4px;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .hazard-del:hover { color: var(--red); }
+
+    .empty-state {
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 12px 0;
+    }
+
+    /* ── Route info strip ── */
+    .route-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .stat-box {
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 8px;
+      text-align: center;
+    }
+    .stat-box .sv { font-size: 16px; font-weight: 700; color: var(--accent); }
+    .stat-box .sl { font-size: 10px; color: var(--muted); margin-top: 1px; }
+
+    /* ── Favourite location chips ── */
+    .fav-chips-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .fav-chip {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      background: rgba(56,189,248,0.1);
+      border: 1px solid rgba(56,189,248,0.25);
+      border-radius: 99px;
+      font-size: 12px;
+      color: var(--accent);
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .fav-chip:hover { background: rgba(56,189,248,0.2); }
+    .fav-chip .fav-del {
+      margin-left: 2px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1;
+    }
+    .fav-chip .fav-del:hover { color: var(--red); }
+    .fav-add-btn {
+      padding: 4px 10px;
+      background: transparent;
+      border: 1px dashed var(--border);
+      border-radius: 99px;
+      font-size: 12px;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .fav-add-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Elevation chart ── */
+    .elevation-wrap {
+      margin-top: 10px;
+      padding: 10px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .elev-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .elev-header strong { color: var(--accent); }
+    .elev-loading { font-size: 11px; color: var(--muted); text-align: center; padding: 8px 0; }
+
+    /* ── Route History ── */
+    .history-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 10px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 6px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .history-item:hover { background: rgba(56,189,248,0.08); border-color: rgba(56,189,248,0.3); }
+    .history-icon { font-size: 18px; flex-shrink: 0; }
+    .history-meta { flex: 1; min-width: 0; }
+    .history-name { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .history-sub  { font-size: 10px; color: var(--muted); margin-top: 1px; }
+    .history-load { font-size: 11px; color: var(--accent); flex-shrink: 0; }
+
+    /* ── Dog hazard modal ── */
+    #hazard-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(4px);
+      align-items: center;
+      justify-content: center;
+    }
+    #hazard-modal.open { display: flex; }
+    .modal-box {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 22px;
+      width: 320px;
+      max-width: 90vw;
+    }
+    .modal-box h3 { font-size: 16px; margin-bottom: 14px; }
+    .modal-box label { margin-bottom: 4px; display: block; font-size: 12px; color: var(--muted); }
+    .modal-box input[type="text"],
+    .modal-box textarea,
+    .modal-box select {
+      width: 100%;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 13px;
+      outline: none;
+      margin-bottom: 12px;
+      font-family: inherit;
+    }
+    .modal-box textarea { resize: vertical; min-height: 60px; }
+    .modal-box select option { background: #1e293b; }
+    .sev-btns {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+    .sev-btn {
+      flex: 1;
+      padding: 7px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .sev-btn.sel-low  { background: rgba(34,197,94,0.2);  color: var(--green);  border-color: var(--green); }
+    .sev-btn.sel-med  { background: rgba(245,158,11,0.2); color: var(--yellow); border-color: var(--yellow); }
+    .sev-btn.sel-high { background: rgba(239,68,68,0.2);  color: var(--red);    border-color: var(--red); }
+    .modal-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+    /* ── Map toggle button (mobile) ── */
+    #sidebar-toggle {
+      display: none;
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 2000;
+      background: var(--accent);
+      color: #0f172a;
+      border: none;
+      border-radius: 50%;
+      width: 52px;
+      height: 52px;
+      font-size: 22px;
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(56,189,248,0.4);
+    }
+
+    /* ── Map overlays ── */
+    .map-mode-banner {
+      display: none;
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 500;
+      background: rgba(251,191,36,0.92);
+      color: #0f172a;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 8px 16px;
+      border-radius: 99px;
+      pointer-events: none;
+    }
+    .map-mode-banner.visible { display: block; }
+
+    .leaflet-popup-content-wrapper {
+      background: var(--panel) !important;
+      color: var(--text) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 10px !important;
+    }
+    .leaflet-popup-tip { background: var(--panel) !important; }
+    .leaflet-popup-content { font-size: 13px !important; }
+
+    /* ── Autocomplete dropdown ── */
+    .autocomplete-dropdown {
+      position: absolute;
+      top: 100%;
+      left: 0; right: 0;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-top: none;
+      border-radius: 0 0 6px 6px;
+      z-index: 5000;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    .autocomplete-item {
+      padding: 8px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+    }
+    .autocomplete-item:hover { background: rgba(255,255,255,0.06); }
+    .autocomplete-item:last-child { border-bottom: none; }
+
+    /* ── Spinner ── */
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 16px;
+      font-size: 13px;
+      z-index: 9000;
+      opacity: 0;
+      transition: all 0.3s;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* ── Sheet drag handle (hidden on desktop) ── */
+    .sheet-handle {
+      display: none;
+      justify-content: center;
+      align-items: center;
+      padding: 10px 0 6px;
+      cursor: grab;
+      touch-action: none;
+      flex-shrink: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .sheet-handle-bar {
+      width: 40px; height: 5px;
+      border-radius: 3px;
+      background: rgba(255,255,255,0.22);
+    }
+
+    /* ── iOS "Add to Home Screen" install banner ── */
+    #ios-install-banner {
+      display: none;
+      position: fixed;
+      bottom: calc(var(--sab) + 12px);
+      left: 16px; right: 16px;
+      z-index: 3500;
+      background: var(--panel);
+      border: 1px solid rgba(56,189,248,0.4);
+      border-radius: 16px;
+      padding: 14px 14px 14px 16px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.55);
+      gap: 12px;
+      animation: slideUp 0.35s ease;
+    }
+    #ios-install-banner.visible { display: flex; align-items: flex-start; }
+    #ios-install-banner .ib-icon { font-size: 30px; flex-shrink: 0; margin-top: 2px; }
+    #ios-install-banner .ib-body { flex: 1; }
+    #ios-install-banner .ib-title { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+    #ios-install-banner .ib-desc { font-size: 12px; color: var(--muted); line-height: 1.55; }
+    #ios-install-banner .ib-desc strong { color: var(--accent); }
+    #ios-install-banner .ib-close {
+      background: none; border: none; color: var(--muted);
+      font-size: 20px; cursor: pointer; padding: 0 0 0 6px;
+      flex-shrink: 0; line-height: 1; align-self: flex-start; margin-top: 2px;
+    }
+    @keyframes slideUp {
+      from { transform: translateY(16px); opacity: 0; }
+      to   { transform: translateY(0);    opacity: 1; }
+    }
+
+    /* ── Mobile / iOS bottom-sheet layout ── */
+    @media (max-width: 640px) {
+
+      /* Map fills the entire screen behind the sheet */
+      .workspace { position: relative; overflow: hidden; }
+      #map { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+      /* Sidebar becomes a draggable bottom sheet */
+      #sidebar {
+        position: fixed;
+        left: 0; right: 0; bottom: 0;
+        width: 100%;
+        height: 84vh;
+        border-right: none;
+        border-top: 1px solid var(--border);
+        border-radius: 20px 20px 0 0;
+        z-index: 1500;
+        /* Peek state: only the handle + card title strip is visible */
+        transform: translateY(calc(100% - 100px));
+        transition: transform 0.4s cubic-bezier(0.32, 0.72, 0, 1);
+        will-change: transform;
+        box-shadow: 0 -6px 40px rgba(0, 0, 0, 0.5);
+        /* Pad content away from home-indicator */
+        padding-bottom: var(--sab);
+      }
+
+      /* Fully expanded */
+      #sidebar.sheet-open { transform: translateY(0); }
+
+      /* Make inner scroll behave like a native sheet */
+      .sidebar-scroll {
+        height: calc(100% - 46px); /* minus handle height */
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+      }
+
+      /* Show the drag handle on mobile */
+      .sheet-handle { display: flex; }
+
+      /* Hide the old FAB toggle */
+      #sidebar-toggle { display: none; }
+
+      /* Larger tap targets for iOS */
+      .btn { padding: 13px 10px; font-size: 14px; }
+
+      .cr-like-btn { font-size: 22px; }
+    }
+
+    /* ── Export to bike computer modal ── */
+    #export-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(0,0,0,0.65);
+      backdrop-filter: blur(4px);
+      align-items: flex-end;
+      justify-content: center;
+    }
+    #export-modal.open { display: flex; }
+    .export-sheet {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 20px 20px 0 0;
+      width: 100%;
+      max-width: 560px;
+      max-height: 88vh;
+      display: flex;
+      flex-direction: column;
+      padding-bottom: var(--sab);
+    }
+    .export-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .export-header-title { font-size: 16px; font-weight: 700; }
+    .export-header-sub   { font-size: 12px; color: var(--muted); margin-top: 3px; }
+    .export-close {
+      background: none; border: none; color: var(--muted);
+      font-size: 22px; cursor: pointer; padding: 0; line-height: 1;
+    }
+    .export-download-zone {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .export-download-btn {
+      width: 100%; padding: 14px; border: none; border-radius: 10px;
+      background: #a855f7; color: #fff;
+      font-size: 15px; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      transition: opacity 0.15s;
+    }
+    .export-download-btn:hover { opacity: 0.88; }
+    .export-gpx-note {
+      font-size: 11px; color: var(--muted); text-align: center; margin-top: 8px;
+      line-height: 1.5;
+    }
+    .export-device-tabs {
+      display: flex; gap: 4px; padding: 14px 20px 0; flex-shrink: 0; flex-wrap: wrap;
+    }
+    .export-tab {
+      padding: 6px 13px; border: 1px solid var(--border); border-radius: 99px;
+      background: transparent; color: var(--muted); font-size: 12px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .export-tab.active {
+      background: rgba(168,85,247,0.15);
+      border-color: rgba(168,85,247,0.5);
+      color: #a855f7;
+    }
+    .export-body {
+      overflow-y: auto;
+      padding: 16px 20px 24px;
+      flex: 1;
+      -webkit-overflow-scrolling: touch;
+    }
+    .export-device-name {
+      font-size: 14px; font-weight: 700; margin-bottom: 12px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .export-steps-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .export-steps-list li {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .export-step-num {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: rgba(168,85,247,0.15);
+      border: 1px solid rgba(168,85,247,0.35);
+      color: #a855f7;
+      font-size: 11px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; margin-top: 1px;
+    }
+    .export-steps-list strong { color: var(--text); }
+    .export-steps-list code {
+      background: rgba(255,255,255,0.08);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-size: 12px;
+      color: var(--accent);
+    }
+    .export-compat-note {
+      font-size: 11px; color: var(--muted); font-style: italic;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.04);
+      border-radius: 8px;
+      line-height: 1.5;
+    }
+
+    /* ══════════════════════════════════════════════
+       Onboarding overlay  (sign-up + tutorial)
+       ══════════════════════════════════════════════ */
+    #onboarding-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: calc(var(--sat) + 20px) 20px calc(var(--sab) + 20px);
+      overflow-y: auto;
+    }
+    #onboarding-overlay.hidden { display: none; }
+
+    .ob-screen {
+      display: none;
+      width: 100%;
+      max-width: 420px;
+      flex-direction: column;
+      align-items: center;
+    }
+    .ob-screen.active { display: flex; }
+
+    /* ── Sign-up card ── */
+    .ob-card {
+      width: 100%;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 30px 24px 24px;
+      text-align: center;
+    }
+    .ob-logo { margin-bottom: 10px; display: flex; justify-content: center; }
+    .ob-title { font-size: 22px; font-weight: 800; margin-bottom: 6px; letter-spacing: -0.4px; }
+    .ob-sub   { font-size: 14px; color: var(--muted); margin-bottom: 24px; }
+    .ob-form  { text-align: left; width: 100%; }
+
+    .ob-field { margin-bottom: 14px; }
+    .ob-field label {
+      display: block;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+    .ob-field input {
+      width: 100%;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 12px 12px;
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.2s;
+      font-family: inherit;
+    }
+    .ob-field input:focus { border-color: var(--accent); }
+    .ob-field .ob-hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+    .ob-error {
+      color: var(--red);
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      min-height: 18px;
+      text-align: center;
+    }
+    .ob-submit { margin-top: 6px; padding: 14px; font-size: 15px; font-weight: 700; }
+    .ob-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+    .ob-terms  {
+      font-size: 11px; color: var(--muted); text-align: center;
+      margin-top: 12px; line-height: 1.5;
+    }
+
+    /* Consent checkbox row */
+    .ob-consent {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 12px;
+      padding: 12px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .ob-consent input[type="checkbox"] {
+      width: 18px; height: 18px;
+      flex-shrink: 0;
+      margin-top: 1px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .ob-consent-text {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .ob-consent-text a {
+      color: var(--accent);
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    /* Privacy policy modal */
+    #privacy-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 10001;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(4px);
+      align-items: flex-end;
+      justify-content: center;
+      padding: 0;
+    }
+    #privacy-modal.open { display: flex; }
+    .privacy-sheet {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 20px 20px 0 0;
+      width: 100%;
+      max-width: 560px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      padding-bottom: var(--sab);
+    }
+    .privacy-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .privacy-header h3 { font-size: 16px; font-weight: 700; }
+    .privacy-close {
+      background: none; border: none; color: var(--muted);
+      font-size: 22px; cursor: pointer; padding: 0; line-height: 1;
+    }
+    .privacy-body {
+      overflow-y: auto;
+      padding: 18px 20px 24px;
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.7;
+      -webkit-overflow-scrolling: touch;
+    }
+    .privacy-body h4 {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      margin: 16px 0 6px;
+    }
+    .privacy-body h4:first-child { margin-top: 0; }
+    .privacy-body p { margin-bottom: 8px; }
+    .privacy-body ul { padding-left: 18px; margin-bottom: 8px; }
+    .privacy-body ul li { margin-bottom: 4px; }
+    .privacy-body a { color: var(--accent); }
+
+    /* ── Tutorial slides ── */
+    .ob-tut {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      min-height: 480px;
+    }
+    .ob-tut-slides {
+      flex: 1;
+      position: relative;
+      min-height: 360px;
+    }
+    .ob-slide {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      text-align: center;
+      opacity: 0;
+      transform: translateX(48px);
+      transition: opacity 0.35s ease, transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+      pointer-events: none;
+    }
+    .ob-slide.active {
+      opacity: 1;
+      transform: translateX(0);
+      pointer-events: auto;
+    }
+    .ob-slide.exit {
+      opacity: 0;
+      transform: translateX(-48px);
+    }
+    .ob-slide-icon {
+      font-size: 80px;
+      line-height: 1;
+      margin-bottom: 22px;
+      filter: drop-shadow(0 4px 24px rgba(56,189,248,0.25));
+    }
+    .ob-slide-title {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.4px;
+      margin-bottom: 14px;
+    }
+    .ob-slide-desc {
+      font-size: 15px;
+      color: var(--muted);
+      line-height: 1.7;
+      max-width: 320px;
+      white-space: pre-line;
+    }
+
+    .ob-tut-footer {
+      padding: 20px 0 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+    .ob-dots { display: flex; gap: 7px; }
+    .ob-dot {
+      height: 7px; width: 7px;
+      border-radius: 99px;
+      background: var(--border);
+      transition: all 0.3s ease;
+    }
+    .ob-dot.active {
+      width: 22px;
+      background: var(--accent);
+    }
+    .ob-tut-btns { display: flex; gap: 10px; width: 100%; }
+    .ob-tut-btns .btn { flex: 1; }
+
+    /* ── Profile badge in header (after signup) ── */
+    .profile-badge {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      position: relative;
+    }
+    /* ── Feedback modal ── */
+    #feedback-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(6px);
+      align-items: center;
+      justify-content: center;
+    }
+    #feedback-modal.open { display: flex; }
+    .feedback-box {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 28px 24px 24px;
+      width: min(90vw, 360px);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .feedback-title {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -0.3px;
+      text-align: center;
+    }
+    .feedback-sub {
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
+      margin-top: -10px;
+    }
+    .star-row {
+      display: flex;
+      justify-content: center;
+      gap: 6px;
+    }
+    .star-btn {
+      background: none;
+      border: none;
+      font-size: 36px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 4px;
+      transition: transform 0.12s;
+      filter: grayscale(1) opacity(0.35);
+    }
+    .star-btn.active, .star-btn.hover {
+      filter: none;
+      transform: scale(1.15);
+    }
+    .star-label {
+      text-align: center;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
+      min-height: 20px;
+    }
+    .feedback-textarea {
+      width: 100%;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      font-size: 14px;
+      padding: 12px;
+      resize: vertical;
+      min-height: 90px;
+      font-family: inherit;
+      box-sizing: border-box;
+    }
+    .feedback-textarea:focus { outline: none; border-color: var(--accent); }
+    .feedback-textarea::placeholder { color: var(--muted); }
+    .feedback-actions { display: flex; gap: 10px; }
+    .feedback-actions .btn { flex: 1; }
+
+    /* Profile dropdown menu */
+    .profile-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 8px;
+      min-width: 210px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+      z-index: 2000;
+    }
+    .profile-menu-info {
+      padding: 10px 12px 8px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 6px;
+    }
+    .profile-menu-name { font-weight: 700; font-size: 14px; }
+    .profile-menu-sub  { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .profile-menu-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      background: none;
+      border: none;
+      color: var(--text);
+      font-size: 13px;
+      padding: 9px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: left;
+      transition: background 0.15s;
+    }
+    .profile-menu-btn:hover { background: rgba(255,255,255,0.07); }
+    .profile-menu-btn.danger { color: var(--red); }
+
+    .profile-avatar {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), #22c55e);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 800;
+      color: #0f172a;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <svg class="logo-svg" width="30" height="30" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <circle cx="8.5" cy="20" r="7" fill="none" stroke="#38bdf8" stroke-width="2.2"/>
+    <circle cx="21.5" cy="20" r="7" fill="none" stroke="#38bdf8" stroke-width="2.2"/>
+    <circle cx="8.5" cy="20" r="1.3" fill="#38bdf8"/>
+    <circle cx="21.5" cy="20" r="1.3" fill="#38bdf8"/>
+    <line x1="8.5" y1="20" x2="15" y2="20" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/>
+    <line x1="15" y1="20" x2="13.5" y2="13" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/>
+    <line x1="18.5" y1="13" x2="15" y2="20" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/>
+    <line x1="13.5" y1="13" x2="18.5" y2="13" stroke="#38bdf8" stroke-width="1.4" stroke-linecap="round"/>
+    <line x1="13.5" y1="13" x2="8.5" y2="20" stroke="#38bdf8" stroke-width="1.4" stroke-linecap="round"/>
+    <line x1="18.5" y1="13" x2="21.5" y2="20" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/>
+    <line x1="11.5" y1="10" x2="15.5" y2="10" stroke="#22c55e" stroke-width="2.2" stroke-linecap="round"/>
+    <line x1="13.5" y1="10" x2="13.5" y2="13" stroke="#38bdf8" stroke-width="1.4" stroke-linecap="round"/>
+    <line x1="18.5" y1="10" x2="22" y2="10" stroke="#22c55e" stroke-width="2.2" stroke-linecap="round"/>
+  </svg>
+  <h1>Safe<span>Ride</span></h1>
+  <div class="traffic-badge" id="traffic-badge">
+    <div class="dot" id="traffic-dot" style="background:var(--green)"></div>
+    <span id="traffic-label">Loading…</span>
+  </div>
+  <div class="profile-badge" id="profile-badge" title="Your profile" style="display:none">
+    <div class="profile-avatar" id="profile-avatar">?</div>
+  </div>
+</header>
+
+<!-- Workspace -->
+<div class="workspace">
+
+  <!-- Sidebar / bottom sheet -->
+  <div id="sidebar">
+    <!-- Drag handle (visible on mobile, hidden on desktop) -->
+    <div id="sheet-handle" class="sheet-handle" role="button" aria-label="Drag to expand or collapse panel">
+      <div class="sheet-handle-bar"></div>
+    </div>
+    <div class="sidebar-scroll">
+
+      <!-- Route planner -->
+      <div class="card">
+        <div class="card-title">📍 Plan Your Ride</div>
+
+        <div class="input-group">
+          <label>Start Location</label>
+          <span class="prefix">🔵</span>
+          <input type="text" id="start-input" placeholder="Search address or use 📍 My Location" autocomplete="off" />
+          <div class="autocomplete-dropdown" id="start-dropdown" style="display:none"></div>
+        </div>
+        <!-- Favourite location chips (Premium) -->
+        <div id="fav-chips-wrap" style="display:none">
+          <div class="fav-chips-row" id="fav-chips-row"></div>
+        </div>
+
+        <div class="input-group" id="end-input-group">
+          <label>End Location</label>
+          <span class="prefix">🔴</span>
+          <input type="text" id="end-input" placeholder="Search destination address" autocomplete="off" />
+          <div class="autocomplete-dropdown" id="end-dropdown" style="display:none"></div>
+        </div>
+
+        <div class="input-group" id="time-budget-group">
+          <label>Time Budget <span style="font-size:10px;color:var(--muted)">(optional — compare against route time)</span></label>
+          <div class="slider-row">
+            <input type="range" id="time-slider" min="15" max="360" step="15" value="60" />
+            <span class="slider-val" id="time-display">60 min</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-top:2px">
+            <span>15 min</span><span>6 hrs</span>
+          </div>
+          <div class="budget-pill" id="budget-pill"></div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button class="btn btn-secondary" id="locate-btn" style="flex:0 0 44px;padding:10px 0">📍</button>
+          <button class="btn btn-primary" id="route-btn">➡️ Find Route</button>
+        </div>
+        <div class="feature-chips">
+          <span class="feature-chip">🚫 No interstates</span>
+          <span class="feature-chip">🚲 Bike-friendly roads</span>
+          <span class="feature-chip">↗ Direction arrows</span>
+        </div>
+
+        <!-- Route stats (hidden until route found) -->
+        <div id="route-stats-wrap" style="display:none;margin-top:12px">
+          <div class="route-stats">
+            <div class="stat-box"><div class="sv" id="stat-dist">—</div><div class="sl">Distance</div></div>
+            <div class="stat-box"><div class="sv" id="stat-time">—</div><div class="sl">Est. Time</div></div>
+            <div class="stat-box"><div class="sv" id="stat-dogs">—</div><div class="sl">Dog Alerts</div></div>
+          </div>
+          <div id="stat-type-badge" style="text-align:center;font-size:11px;color:var(--muted);padding:4px 0 6px"></div>
+          <!-- Elevation profile (Premium) -->
+          <div id="elevation-wrap" style="display:none" class="elevation-wrap">
+            <div class="elev-header">
+              <span>📈 Elevation Profile</span>
+              <span id="elev-stats-label"></span>
+            </div>
+            <div id="elev-chart-area"><div class="elev-loading">Loading elevation…</div></div>
+          </div>
+          <button class="btn btn-secondary" id="save-route-btn" style="margin-bottom:6px">🔒 Save to Community Routes <span style="font-size:10px;opacity:.7">(Premium)</span></button>
+          <button class="btn btn-secondary" id="export-btn" style="margin-bottom:6px;background:rgba(168,85,247,0.1);border-color:rgba(168,85,247,0.35);color:#a855f7">📡 Export to Bike Computer</button>
+          <button class="btn btn-danger" id="clear-route-btn">✕ Clear Route</button>
+        </div>
+      </div>
+
+      <!-- Nearby bike paths -->
+      <div class="card" id="bike-paths-card">
+        <div class="card-title">🚲 Nearby Bike Paths & Trails</div>
+        <div id="bike-paths-list">
+          <div class="empty-state">Plan a route to discover nearby bike paths</div>
+        </div>
+      </div>
+
+      <!-- Community routes -->
+      <div class="card">
+        <div class="card-title" style="display:flex;align-items:center;justify-content:space-between">
+          <span>⭐ Community Routes</span>
+          <span id="cr-count" style="font-size:10px;color:var(--muted)"></span>
+        </div>
+        <div class="cr-tabs">
+          <button class="cr-tab active" data-tab="all">All Routes</button>
+          <button class="cr-tab" data-tab="mine">My Saved</button>
+        </div>
+        <div id="community-list">
+          <div class="cr-empty">
+            <div class="cr-empty-icon">🚴</div>
+            <div class="cr-empty-text">No community routes yet.<br>Save your first route above!</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Route History (Premium) -->
+      <div class="card" id="history-card" style="display:none">
+        <div class="card-title" style="display:flex;align-items:center;justify-content:space-between">
+          <span>📜 Route History</span>
+          <button id="history-clear-btn" style="font-size:11px;color:var(--muted);background:none;border:none;cursor:pointer;padding:0">Clear all</button>
+        </div>
+        <div id="history-list">
+          <div class="empty-state">No routes yet — plan your first ride!</div>
+        </div>
+      </div>
+
+      <!-- Safety score -->
+      <div class="card">
+        <div class="card-title">🛡 Current Safety Score</div>
+        <div class="score-ring-wrap">
+          <div class="score-ring">
+            <svg width="64" height="64" viewBox="0 0 64 64">
+              <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="6"/>
+              <circle id="score-arc" cx="32" cy="32" r="26" fill="none" stroke="var(--green)" stroke-width="6"
+                stroke-linecap="round" stroke-dasharray="163.4" stroke-dashoffset="0"/>
+            </svg>
+            <div class="score-num" id="score-num">—</div>
+          </div>
+          <div class="score-details">
+            <div class="score-label" id="score-label">Calculating…</div>
+            <div class="score-desc" id="score-desc">Analyzing traffic patterns for your area</div>
+          </div>
+        </div>
+
+        <div class="legend-rows">
+          <div class="legend-row">
+            <div class="legend-dot" style="background:var(--green)"></div>
+            <span>Low traffic – ideal for cycling</span>
+            <span class="legend-sub">Score 80–100</span>
+          </div>
+          <div class="legend-row">
+            <div class="legend-dot" style="background:var(--yellow)"></div>
+            <span>Moderate – stay alert</span>
+            <span class="legend-sub">Score 50–79</span>
+          </div>
+          <div class="legend-row">
+            <div class="legend-dot" style="background:var(--red)"></div>
+            <span>High traffic – avoid if possible</span>
+            <span class="legend-sub">Score &lt;50</span>
+          </div>
+        </div>
+
+        <div id="best-time-tip" style="margin-top:10px;padding:8px;background:rgba(56,189,248,0.08);border-radius:6px;font-size:11px;color:var(--muted);line-height:1.5"></div>
+      </div>
+
+      <!-- Dog hazard mode (premium only — hidden until upgraded) -->
+      <div class="card" id="dog-hazard-card" style="display:none">
+        <div class="card-title">🐕 Dog Hazard Pins</div>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5">
+          Pin houses with dogs along routes. When enabled, tap anywhere on the map to mark a hazard.
+        </p>
+        <button class="btn btn-dog" id="dog-mode-btn">🔒 Dog Pin Mode <span style="font-size:10px;opacity:.7">(Premium)</span></button>
+
+        <div style="margin-top:12px">
+          <div class="card-title" style="margin-bottom:8px">Pinned Hazards</div>
+          <div class="hazard-list" id="hazard-list">
+            <div class="empty-state">No hazards pinned yet</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Premium upsell — hidden once user upgrades -->
+      <div class="card" id="premium-upsell-card">
+        <div class="card-title" style="margin-bottom:4px">⭐ SafeRide Premium</div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 12px;line-height:1.5">Unlock the full app — one purchase, yours forever.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+          <div class="premium-feature-tile">
+            <div class="pft-icon">🐕</div>
+            <div class="pft-name">Dog Hazard Pins</div>
+            <div class="pft-desc">Mark &amp; share aggressive dogs on your route</div>
+          </div>
+          <div class="premium-feature-tile">
+            <div class="pft-icon">🗺</div>
+            <div class="pft-name">Community Routes</div>
+            <div class="pft-desc">Share &amp; discover top local rides</div>
+          </div>
+          <div class="premium-feature-tile">
+            <div class="pft-icon">📍</div>
+            <div class="pft-name">Saved Locations</div>
+            <div class="pft-desc">One-tap start from your favourite spots</div>
+          </div>
+          <div class="premium-feature-tile">
+            <div class="pft-icon">📜</div>
+            <div class="pft-name">Route History</div>
+            <div class="pft-desc">Reload any past ride instantly</div>
+          </div>
+          <div class="premium-feature-tile">
+            <div class="pft-icon">🌬️</div>
+            <div class="pft-name">Wind-Smart Routing</div>
+            <div class="pft-desc">Tailwind home, every time</div>
+          </div>
+          <div class="premium-feature-tile">
+            <div class="pft-icon">📈</div>
+            <div class="pft-name">Elevation Profile</div>
+            <div class="pft-desc">See every climb before you ride</div>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="upsell-upgrade-btn" style="width:100%;font-size:14px">⭐ Upgrade to Premium</button>
+      </div>
+
+    </div><!-- /sidebar-scroll -->
+  </div><!-- /sidebar -->
+
+  <!-- Map -->
+  <div id="map">
+    <div class="map-mode-banner" id="dog-mode-banner">🐕 Dog Pin Mode — Tap map to mark a hazard</div>
+  </div>
+
+</div><!-- /workspace -->
+
+<!-- Sidebar toggle (mobile) -->
+<button id="sidebar-toggle">☰</button>
+
+<!-- Dog hazard modal -->
+<div id="hazard-modal">
+  <div class="modal-box">
+    <h3>🐕 Mark Dog Hazard</h3>
+    <label>Location nickname (optional)</label>
+    <input type="text" id="hazard-name" placeholder="e.g. Corner of Oak & Main" />
+    <label>Severity</label>
+    <div class="sev-btns">
+      <button class="sev-btn" data-sev="low">🟢 Low</button>
+      <button class="sev-btn" data-sev="med">🟡 Medium</button>
+      <button class="sev-btn" data-sev="high">🔴 High</button>
+    </div>
+    <label>Notes</label>
+    <textarea id="hazard-notes" placeholder="e.g. Large dog, runs to fence, barks aggressively…"></textarea>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="modal-cancel" style="flex:1">Cancel</button>
+      <button class="btn btn-primary" id="modal-save" style="flex:2">📌 Save Hazard</button>
+    </div>
+  </div>
+</div>
+
+<!-- Save route modal -->
+<div id="save-route-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px);align-items:center;justify-content:center">
+  <div class="modal-box">
+    <h3>⭐ Save to Community Routes</h3>
+    <label>Route Name</label>
+    <input type="text" id="sr-name" placeholder="e.g. Swamp Rabbit Trail Ride" />
+    <label>Your Cyclist Handle</label>
+    <input type="text" id="sr-author" placeholder="e.g. SpeedyPedals" />
+    <label>Tips for other riders (optional)</label>
+    <textarea id="sr-note" placeholder="e.g. Best at sunrise, watch for the downhill on Oak St…"></textarea>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" id="sr-cancel" style="flex:1">Cancel</button>
+      <button class="btn btn-primary" id="sr-save" style="flex:2">⭐ Share with Community</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Feedback / Rating modal ══ -->
+<div id="feedback-modal">
+  <div class="feedback-box">
+    <div class="feedback-title">⭐ Rate SafeRide</div>
+    <div class="feedback-sub">Your feedback goes straight to the developer</div>
+
+    <div class="star-row" id="star-row">
+      <button class="star-btn" data-star="1" title="Poor">⭐</button>
+      <button class="star-btn" data-star="2" title="Fair">⭐</button>
+      <button class="star-btn" data-star="3" title="Good">⭐</button>
+      <button class="star-btn" data-star="4" title="Great">⭐</button>
+      <button class="star-btn" data-star="5" title="Love it!">⭐</button>
+    </div>
+    <div class="star-label" id="star-label">Tap a star to rate</div>
+
+    <textarea class="feedback-textarea" id="feedback-text"
+      placeholder="Tell us what you love, what could be better, or any bugs you spotted…"></textarea>
+
+    <div class="feedback-actions">
+      <button class="btn btn-secondary" id="feedback-cancel">Cancel</button>
+      <button class="btn btn-primary" id="feedback-submit" disabled>Send Feedback</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Premium upgrade modal ══ -->
+<div id="premium-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.72);backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:16px">
+  <div class="modal-box" style="max-width:340px;width:100%">
+    <div style="text-align:center;font-size:2.4rem;margin-bottom:2px">⭐</div>
+    <h3 style="text-align:center;margin:0 0 4px;font-size:18px">SafeRide Premium</h3>
+    <p style="text-align:center;color:var(--muted);font-size:13px;margin:0 0 14px">Unlock the full cycling experience</p>
+
+    <div style="background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.2);border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.9">
+      <div>🐕 <strong>Dog Hazard Pins</strong> — mark &amp; share dog encounters</div>
+      <div>🗺 <strong>Community Route Sharing</strong> — post your best rides</div>
+      <div>📍 <strong>Saved Favourite Locations</strong> — one-tap start points</div>
+      <div>📜 <strong>Route History</strong> — reload any past ride instantly</div>
+      <div>🌬️ <strong>Wind-Smart Routing</strong> — tailwind home, every time</div>
+      <div>📈 <strong>Elevation Profile</strong> — see every climb before you ride</div>
+    </div>
+
+    <div style="text-align:center;font-size:24px;font-weight:700;color:var(--accent);margin-bottom:14px">
+      $4.99 <span style="font-size:13px;font-weight:400;color:var(--muted)">one-time purchase</span>
+    </div>
+
+    <a id="premium-buy-btn" href="https://buy.stripe.com/3cIaEX0wQc627Mo1JWds407" target="_blank" class="btn btn-primary" style="display:block;text-align:center;margin-bottom:14px;text-decoration:none">
+      💳 Buy Now — $4.99
+    </a>
+
+    <div style="border-top:1px solid var(--border);padding-top:12px">
+      <p style="font-size:12px;color:var(--muted);margin:0 0 8px;text-align:center">Already purchased? Enter your unlock code:</p>
+      <div style="display:flex;gap:6px">
+        <input type="text" id="premium-code-input" placeholder="e.g. SAFE-XXXX-XXXX"
+          style="flex:1;padding:9px 10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;outline:none" />
+        <button class="btn btn-secondary" id="premium-code-btn" style="flex:0 0 auto;white-space:nowrap">Unlock</button>
+      </div>
+      <div id="premium-code-error" style="font-size:11px;color:var(--red);margin-top:6px;text-align:center;min-height:14px"></div>
+    </div>
+
+    <button class="btn btn-secondary" id="premium-cancel" style="margin-top:10px;width:100%">Maybe Later</button>
+  </div>
+</div>
+
+<!-- ══ Onboarding overlay: Sign-up + Tutorial ══ -->
+<div id="onboarding-overlay" class="hidden">
+
+  <!-- Screen 1: Profile sign-up -->
+  <div id="ob-signup" class="ob-screen active">
+    <div class="ob-card">
+      <div class="ob-logo">
+        <svg width="72" height="72" viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs>
+            <radialGradient id="ob-glow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.18"/>
+              <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <circle cx="36" cy="36" r="34" fill="url(#ob-glow)"/>
+          <circle cx="20" cy="46" r="16" fill="none" stroke="#38bdf8" stroke-width="4"/>
+          <circle cx="52" cy="46" r="16" fill="none" stroke="#38bdf8" stroke-width="4"/>
+          <circle cx="20" cy="46" r="2.5" fill="#38bdf8"/>
+          <circle cx="52" cy="46" r="2.5" fill="#38bdf8"/>
+          <line x1="20" y1="46" x2="36" y2="46" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round"/>
+          <line x1="36" y1="46" x2="33" y2="30" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round"/>
+          <line x1="45" y1="30" x2="36" y2="46" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round"/>
+          <line x1="33" y1="30" x2="45" y2="30" stroke="#38bdf8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="33" y1="30" x2="20" y2="46" stroke="#38bdf8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="45" y1="30" x2="52" y2="46" stroke="#38bdf8" stroke-width="3.5" stroke-linecap="round"/>
+          <line x1="27" y1="24" x2="36" y2="24" stroke="#22c55e" stroke-width="4" stroke-linecap="round"/>
+          <line x1="33" y1="24" x2="33" y2="30" stroke="#38bdf8" stroke-width="3" stroke-linecap="round"/>
+          <line x1="45" y1="24" x2="52" y2="24" stroke="#22c55e" stroke-width="4" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="ob-title">Welcome to SafeRide</div>
+      <div class="ob-sub">Create your free profile to get started</div>
+
+      <div class="ob-form">
+        <div class="ob-field">
+          <label>Full Name</label>
+          <input type="text" id="ob-name" placeholder="Jane Smith" autocomplete="name" />
+        </div>
+        <div class="ob-field">
+          <label>Email Address</label>
+          <input type="email" id="ob-email" placeholder="jane@example.com" autocomplete="email" />
+          <div class="ob-hint">🔒 Stays on your device — never shared</div>
+        </div>
+        <div class="ob-field">
+          <label>Cyclist Handle <span style="font-weight:400;text-transform:none;letter-spacing:0">(shown on shared routes)</span></label>
+          <input type="text" id="ob-handle" placeholder="e.g. SpeedyJane" autocomplete="off" />
+        </div>
+        <div class="ob-error" id="ob-error"></div>
+
+        <!-- Required consent checkbox -->
+        <label class="ob-consent">
+          <input type="checkbox" id="ob-consent-check" />
+          <span class="ob-consent-text">
+            I have read and agree to the
+            <a id="privacy-link">Privacy Policy</a>.
+            I understand my data is stored only on this device and is never sent to any server.
+          </span>
+        </label>
+
+        <button class="btn btn-primary ob-submit" id="ob-submit" disabled>Create Profile →</button>
+        <p class="ob-terms">🔒 No account servers. No marketing emails. No data sharing. Ever.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Screen 2: Tutorial slides -->
+  <div id="ob-tutorial" class="ob-screen">
+    <div class="ob-tut">
+      <div class="ob-tut-slides" id="ob-slides"></div>
+      <div class="ob-tut-footer">
+        <div class="ob-dots" id="ob-dots"></div>
+        <div class="ob-tut-btns">
+          <button class="btn btn-secondary" id="ob-skip">Skip Tour</button>
+          <button class="btn btn-primary"   id="ob-next">Next →</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Export to Bike Computer modal -->
+<div id="export-modal">
+  <div class="export-sheet">
+
+    <div class="export-header">
+      <div>
+        <div class="export-header-title">📡 Export to Bike Computer</div>
+        <div class="export-header-sub">Download your route · import to your device</div>
+      </div>
+      <button class="export-close" id="export-close">✕</button>
+    </div>
+
+    <!-- GPX download -->
+    <div class="export-download-zone">
+      <button class="export-download-btn" id="gpx-download-btn">
+        📥 Download GPX File
+      </button>
+      <div class="export-gpx-note">
+        GPX is the universal cycling format — works with Garmin, Wahoo, Hammerhead, and more.<br>
+        Includes full track + turn-by-turn waypoints.
+      </div>
+    </div>
+
+    <!-- Device tabs -->
+    <div class="export-device-tabs" id="export-tabs">
+      <button class="export-tab active" data-device="garmin">🟠 Garmin</button>
+      <button class="export-tab" data-device="wahoo">⚡ Wahoo</button>
+      <button class="export-tab" data-device="hammerhead">🔴 Karoo</button>
+      <button class="export-tab" data-device="usb">🔌 USB / Other</button>
+    </div>
+
+    <!-- Instructions pane -->
+    <div class="export-body" id="export-instructions"></div>
+
+  </div>
+</div>
+
+<!-- Privacy Policy bottom-sheet -->
+
+<div id="privacy-modal">
+  <div class="privacy-sheet">
+    <div class="privacy-header">
+      <h3>🔒 Privacy Policy</h3>
+      <button class="privacy-close" id="privacy-close">✕</button>
+    </div>
+    <div class="privacy-body">
+
+      <p><em>Last updated: May 2026 &nbsp;·&nbsp; SafeRide is a personal cycling safety tool. This policy explains exactly what data we collect, where it lives, and what we do with it.</em></p>
+
+      <h4>What We Collect</h4>
+      <p>When you create a profile we collect:</p>
+      <ul>
+        <li><strong>Full name</strong> — to personalise your experience</li>
+        <li><strong>Email address</strong> — to identify your profile on this device</li>
+        <li><strong>Cyclist handle</strong> — displayed when you share community routes</li>
+      </ul>
+
+      <h4>Where Your Data Lives</h4>
+      <p>All data is stored exclusively in your browser's <strong>local storage</strong> on your own device. SafeRide has no servers, no databases, and no cloud accounts. Your information <strong>never leaves your device</strong>.</p>
+
+      <h4>What We Do NOT Do</h4>
+      <ul>
+        <li>We do not send your data to any server or third party</li>
+        <li>We do not send marketing, promotional, or any other emails</li>
+        <li>We do not sell, rent, or share your information</li>
+        <li>We do not use tracking pixels, cookies, or analytics</li>
+        <li>We do not create accounts on external platforms on your behalf</li>
+      </ul>
+
+      <h4>Location Data</h4>
+      <p>Your GPS location is used <strong>only within the current session</strong> to centre the map and find nearby bike paths. It is not stored, logged, or transmitted anywhere. You can deny location access at any time in your device settings.</p>
+
+      <h4>Dog Hazards &amp; Saved Routes</h4>
+      <p>Pins you place and routes you save are stored locally on your device only. They are visible only to you unless you explicitly choose to share a route via the Community Routes feature, in which case the route name, handle, distance, and notes are saved locally and displayed to other users of the same device.</p>
+
+      <h4>Third-Party Map Services</h4>
+      <p>To display maps and calculate routes, the app contacts these free open-source services. They receive only the minimum location data needed to function:</p>
+      <ul>
+        <li><a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> — map tiles</li>
+        <li><a href="https://project-osrm.org" target="_blank">OSRM</a> — bicycle route calculation</li>
+        <li><a href="https://nominatim.org" target="_blank">Nominatim</a> — address search</li>
+        <li><a href="https://overpass-api.de" target="_blank">Overpass API</a> — bike path data</li>
+      </ul>
+      <p>Each service has its own privacy policy. None of them receive your name or email.</p>
+
+      <h4>Deleting Your Data</h4>
+      <p>To delete all your SafeRide data: open your browser or Safari settings, navigate to Website Data or Storage, and clear data for this site. This permanently removes your profile, saved routes, and all hazard pins.</p>
+
+      <h4>Children's Privacy</h4>
+      <p>SafeRide is not directed at children under 13. If you are under 13, please ask a parent or guardian before creating a profile.</p>
+
+      <h4>Changes to This Policy</h4>
+      <p>If this policy changes, the updated date at the top will reflect it. Continued use of the app after changes constitutes acceptance.</p>
+
+      <h4>Contact</h4>
+      <p>Questions about this privacy policy? You can reach the developer through the app's community or support channels.</p>
+
+    </div>
+  </div>
+</div>
+
+<!-- iOS "Add to Home Screen" install prompt -->
+<div id="ios-install-banner">
+  <div class="ib-icon">
+    <svg width="30" height="30" viewBox="0 0 30 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <circle cx="8.5" cy="20" r="7" fill="none" stroke="#38bdf8" stroke-width="2.2"/>
+      <circle cx="21.5" cy="20" r="7" fill="none" stroke="#38bdf8" stroke-width="2.2"/>
+      <circle cx="8.5" cy="20" r="1.3" fill="#38bdf8"/>
+      <circle cx="21.5" cy="20" r="1.3" fill="#38bdf8"/>
+      <line x1="8.5" y1="20" x2="15" y2="20" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="15" y1="20" x2="13.5" y2="13" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="18.5" y1="13" x2="15" y2="20" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="13.5" y1="13" x2="18.5" y2="13" stroke="#38bdf8" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="13.5" y1="13" x2="8.5" y2="20" stroke="#38bdf8" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="18.5" y1="13" x2="21.5" y2="20" stroke="#38bdf8" stroke-width="1.8" stroke-linecap="round"/>
+      <line x1="11.5" y1="10" x2="15.5" y2="10" stroke="#22c55e" stroke-width="2.2" stroke-linecap="round"/>
+      <line x1="13.5" y1="10" x2="13.5" y2="13" stroke="#38bdf8" stroke-width="1.4" stroke-linecap="round"/>
+      <line x1="18.5" y1="10" x2="22" y2="10" stroke="#22c55e" stroke-width="2.2" stroke-linecap="round"/>
+    </svg>
+  </div>
+  <div class="ib-body">
+    <div class="ib-title">Install SafeRide on your iPhone</div>
+    <div class="ib-desc">
+      Tap <strong>Share ↑</strong> at the bottom of Safari,<br>
+      then choose <strong>"Add to Home Screen"</strong>
+    </div>
+  </div>
+  <button class="ib-close" id="ios-install-close" aria-label="Dismiss">✕</button>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+/* © 2025 Corevel Physio | SafeRide. All rights reserved. Unauthorised copying prohibited. */
+'use strict';
+
+const CYCLING_SPEED_KMH = 15;   // average leisure cycling speed
+const CIRCUMFERENCE = 2 * Math.PI * 26; // SVG ring circumference
+
+const FEEDBACK_EMAIL = 'ethan@corevelophysio.com';
+
+const state = {
+map: null,
+userLocation: null,
+startLatLng: null,
+endLatLng: null,
+timeBudget: 60,
+routeType: 'p2p',
+routingControl: null,
+routeLayer: null,
+_routeDecorator: null,
+routeSteps: [],      // OSRM turn-by-turn steps for GPX export
+routeName: '',
+bikePathLayer: null,
+bikePaths: [],
+communityLayer: null,
+savedRoutes: [],
+likedIds: new Set(),
+communityTab: 'all',
+dogMode: false,
+pendingHazardLatLng: null,
+selectedSeverity: 'med',
+hazards: [],
+hazardMarkers: [],
+trafficCircles: [],
+trafficLevel: null,
+};
+
+function loadHazards() {
+try { return JSON.parse(localStorage.getItem('cg_hazards') || '[]'); } catch { return []; }
+}
+function saveHazards() {
+localStorage.setItem('cg_hazards', JSON.stringify(state.hazards));
+}
+
+function computeTrafficLevel(date = new Date()) {
+const h   = date.getHours();
+const dow = date.getDay(); // 0=Sun 6=Sat
+const isWeekend = dow === 0 || dow === 6;
+
+let level, score, label, desc;
+
+if (isWeekend) {
+if (h >= 10 && h <= 16) {
+level = 'moderate'; score = 68;
+label = 'Moderate'; desc = 'Weekend midday – some leisure traffic. Good time to ride.';
+} else {
+level = 'low'; score = 88;
+label = 'Excellent'; desc = 'Weekend off-peak – roads are quiet. Perfect for cycling!';
+}
+} else {
+
+if ((h >= 7 && h <= 9) || (h >= 16 && h <= 19)) {
+level = 'high'; score = 38;
+label = 'High Traffic'; desc = 'Rush hour – use bike lanes and residential roads.';
+} else if ((h >= 6 && h < 7) || (h > 9 && h <= 11) || (h > 15 && h < 16) || (h > 19 && h <= 21)) {
+level = 'moderate'; score = 62;
+label = 'Moderate'; desc = 'Shoulder hour – traffic easing. Manageable for cyclists.';
+} else if (h >= 22 || h < 6) {
+level = 'low'; score = 82;
+label = 'Very Low'; desc = 'Late night/early morning – minimal traffic. Use lights!';
+} else {
+level = 'low'; score = 85;
+label = 'Good'; desc = 'Off-peak hours – light traffic. Enjoy your ride!';
+}
+}
+
+return { level, score, label, desc };
+}
+
+function getBestRideTimes() {
+const tips = [
+'🌅 Early morning (6–7 AM) – quietest roads on weekdays',
+'☀️ Mid-morning (10 AM–noon) – after rush hour subsides',
+'🌆 Evenings after 8 PM – traffic drops significantly',
+'📅 Saturday/Sunday mornings – lowest traffic of the week',
+];
+return tips.join('<br>');
+}
+
+function formatDuration(min) {
+if (min < 60) return `${min} min`;
+const h   = Math.floor(min / 60);
+const rem = min % 60;
+const hrs = `${h} hr${h > 1 ? 's' : ''}`;
+return rem === 0 ? hrs : `${hrs} ${rem} min`;
+}
+
+function destinationPoint(lat, lng, bearingDeg, distKm) {
+const R  = 6371;
+const d  = distKm / R;
+const φ1 = lat * Math.PI / 180;
+const λ1 = lng * Math.PI / 180;
+const θ  = bearingDeg * Math.PI / 180;
+const φ2 = Math.asin(Math.sin(φ1) * Math.cos(d) + Math.cos(φ1) * Math.sin(d) * Math.cos(θ));
+const λ2 = λ1 + Math.atan2(Math.sin(θ) * Math.sin(d) * Math.cos(φ1), Math.cos(d) - Math.sin(φ1) * Math.sin(φ2));
+return { lat: φ2 * 180 / Math.PI, lng: ((λ2 * 180 / Math.PI) + 540) % 360 - 180 };
+}
+
+function computeRouteScore(trafficScore, dogHazardsNearby) {
+let s = trafficScore;
+s -= Math.min(dogHazardsNearby * 8, 30);
+return Math.max(0, Math.round(s));
+}
+
+function initMap() {
+state.map = L.map('map', { zoomControl: true }).setView([37.7749, -122.4194], 13);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a>',
+maxZoom: 19,
+}).addTo(state.map);
+
+state.map.on('click', onMapClick);
+}
+
+function drawTrafficOverlay(center, level) {
+
+state.trafficCircles.forEach(c => state.map.removeLayer(c));
+state.trafficCircles = [];
+
+const colors = { low: '#22c55e', moderate: '#f59e0b', high: '#ef4444' };
+const color  = colors[level] || '#22c55e';
+
+const radii = [300, 700, 1200, 2000];
+const opacities = [0.18, 0.12, 0.08, 0.04];
+
+radii.forEach((r, i) => {
+const c = L.circle(center, {
+radius: r,
+color: color,
+fillColor: color,
+fillOpacity: opacities[i],
+weight: i === 0 ? 1 : 0,
+opacity: 0.3,
+interactive: false,
+}).addTo(state.map);
+state.trafficCircles.push(c);
+});
+}
+
+function updateTrafficUI(trafficInfo) {
+state.trafficLevel = trafficInfo.level;
+
+const colors = { low: '#22c55e', moderate: '#f59e0b', high: '#ef4444' };
+const color   = colors[trafficInfo.level];
+
+document.getElementById('traffic-dot').style.background   = color;
+document.getElementById('traffic-label').textContent      = trafficInfo.label;
+
+const offset = CIRCUMFERENCE * (1 - trafficInfo.score / 100);
+document.getElementById('score-arc').style.stroke          = color;
+document.getElementById('score-arc').style.strokeDashoffset = offset;
+document.getElementById('score-num').textContent           = trafficInfo.score;
+document.getElementById('score-label').textContent         = trafficInfo.label;
+document.getElementById('score-desc').textContent          = trafficInfo.desc;
+
+document.getElementById('best-time-tip').innerHTML =
+'<strong style="color:var(--accent);font-size:11px">Best times to ride:</strong><br>' + getBestRideTimes();
+}
+
+function locateUser() {
+const btn = document.getElementById('locate-btn');
+btn.textContent = '⏳';
+btn.disabled    = true;
+
+navigator.geolocation.getCurrentPosition(
+pos => {
+const { latitude: lat, longitude: lng } = pos.coords;
+state.userLocation = L.latLng(lat, lng);
+state.map.setView([lat, lng], 13);
+
+if (state._userMarker) state.map.removeLayer(state._userMarker);
+state._userMarker = L.circleMarker([lat, lng], {
+radius: 8,
+color: '#fff',
+weight: 2,
+fillColor: '#38bdf8',
+fillOpacity: 1,
+}).addTo(state.map).bindPopup('📍 Your location');
+
+state.startLatLng = state.userLocation;
+reverseGeocode(lat, lng, name => {
+document.getElementById('start-input').value = name;
+});
+
+drawTrafficOverlay([lat, lng], state.trafficLevel || 'low');
+fetchNearbyBikePaths(lat, lng);
+btn.textContent = '📍';
+btn.disabled    = false;
+showToast('📍 Location found!');
+},
+err => {
+btn.textContent = '📍';
+btn.disabled    = false;
+showToast('⚠️ Could not get location — check browser permissions');
+},
+{ timeout: 10000 }
+);
+}
+
+let geocodeTimers = {};
+
+function geocodeSearch(query, callback) {
+const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&addressdetails=1`;
+fetch(url, { headers: { 'Accept-Language': 'en' } })
+.then(r => r.json())
+.then(results => callback(results))
+.catch(() => callback([]));
+}
+
+function reverseGeocode(lat, lng, callback) {
+const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`;
+fetch(url, { headers: { 'Accept-Language': 'en' } })
+.then(r => r.json())
+.then(d => callback(d.display_name || `${lat.toFixed(4)}, ${lng.toFixed(4)}`))
+.catch(() => callback(`${lat.toFixed(4)}, ${lng.toFixed(4)}`));
+}
+
+function bindAutocomplete(inputId, dropdownId, onSelect) {
+const input    = document.getElementById(inputId);
+const dropdown = document.getElementById(dropdownId);
+
+input.addEventListener('input', () => {
+clearTimeout(geocodeTimers[inputId]);
+const q = input.value.trim();
+if (q.length < 3) { dropdown.style.display = 'none'; return; }
+
+geocodeTimers[inputId] = setTimeout(() => {
+geocodeSearch(q, results => {
+if (!results.length) { dropdown.style.display = 'none'; return; }
+dropdown.innerHTML = results.map((r, i) =>
+`<div class="autocomplete-item" data-idx="${i}">${r.display_name}</div>`
+).join('');
+dropdown.style.display = 'block';
+
+dropdown.querySelectorAll('.autocomplete-item').forEach((el, i) => {
+el.addEventListener('click', () => {
+const r = results[i];
+input.value          = r.display_name;
+dropdown.style.display = 'none';
+onSelect(L.latLng(parseFloat(r.lat), parseFloat(r.lon)), r.display_name);
+});
+});
+});
+}, 400);
+});
+
+document.addEventListener('click', e => {
+if (!input.contains(e.target) && !dropdown.contains(e.target))
+dropdown.style.display = 'none';
+});
+}
+
+function loadFavorites() {
+try { return JSON.parse(localStorage.getItem('cg_favorites') || '[]'); } catch { return []; }
+}
+function saveFavorites(favs) {
+localStorage.setItem('cg_favorites', JSON.stringify(favs));
+}
+function renderFavoriteChips() {
+const wrap = document.getElementById('fav-chips-wrap');
+const row  = document.getElementById('fav-chips-row');
+if (!isPremium()) { wrap.style.display = 'none'; return; }
+const favs = loadFavorites();
+wrap.style.display = 'block';
+row.innerHTML = favs.map(f => `
+<button class="fav-chip" data-id="${f.id}" title="Use as start">
+${f.emoji} ${f.name}
+<span class="fav-del" data-del="${f.id}" title="Remove">✕</span>
+</button>
+`).join('') + `<button class="fav-add-btn" id="fav-add-btn">+ Save start</button>`;
+
+row.querySelectorAll('.fav-chip').forEach(btn => {
+btn.addEventListener('click', e => {
+if (e.target.dataset.del) {
+const favs2 = loadFavorites().filter(f => f.id !== e.target.dataset.del);
+saveFavorites(favs2);
+renderFavoriteChips();
+return;
+}
+const fav = loadFavorites().find(f => f.id === btn.dataset.id);
+if (!fav) return;
+state.startLatLng = fav.latlng;
+document.getElementById('start-input').value = fav.name;
+if (state._startMarker) state.map.removeLayer(state._startMarker);
+state._startMarker = L.circleMarker(fav.latlng, {
+radius: 7, color: '#fff', weight: 2, fillColor: '#38bdf8', fillOpacity: 1,
+}).addTo(state.map).bindPopup('🔵 Start');
+state.map.setView(fav.latlng, 14);
+showToast(`📍 Start set to ${fav.name}`);
+});
+});
+
+document.getElementById('fav-add-btn')?.addEventListener('click', () => {
+if (!state.startLatLng) { showToast('⚠️ Set a start location first'); return; }
+const name = (document.getElementById('start-input').value.trim() || 'Favourite').slice(0, 30);
+const emojis = ['📍','🏠','🏢','☕','🏋️','🌳','🏪','🏫'];
+const emoji = emojis[loadFavorites().length % emojis.length];
+const fav = { id: Date.now().toString(), name, emoji, latlng: state.startLatLng };
+const favs2 = [...loadFavorites(), fav];
+saveFavorites(favs2);
+renderFavoriteChips();
+showToast(`${emoji} "${name}" saved as favourite!`);
+});
+}
+
+const MAX_HISTORY = 20;
+
+function loadHistory() {
+try { return JSON.parse(localStorage.getItem('cg_history') || '[]'); } catch { return []; }
+}
+function saveHistory(h) { localStorage.setItem('cg_history', JSON.stringify(h)); }
+
+function addToHistory(route, routeType) {
+if (!isPremium()) return;
+const distKm  = (route.distance / 1000).toFixed(1);
+const timeMin = Math.round(route.duration / 60);
+const entry = {
+id: Date.now().toString(),
+date: Date.now(),
+routeType,
+distKm,
+timeMin,
+name: `➡️ Route ${distKm} km`,
+geometry: route.geometry,
+trafficLevel: state.trafficLevel || 'low',
+};
+const history = [entry, ...loadHistory()].slice(0, MAX_HISTORY);
+saveHistory(history);
+renderHistory();
+}
+
+function renderHistory() {
+const card = document.getElementById('history-card');
+const list = document.getElementById('history-list');
+if (!isPremium()) { card.style.display = 'none'; return; }
+const history = loadHistory();
+card.style.display = 'block';
+if (!history.length) {
+list.innerHTML = '<div class="empty-state">No routes yet — plan your first ride!</div>';
+return;
+}
+list.innerHTML = history.map(h => {
+const d = new Date(h.date);
+const dateStr = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const timeStr = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+return `
+<div class="history-item" data-id="${h.id}">
+<div class="history-icon">➡️</div>
+<div class="history-meta">
+<div class="history-name">${h.distKm} km · ${h.timeMin} min</div>
+<div class="history-sub">${dateStr} at ${timeStr} · ${h.trafficLevel} traffic</div>
+</div>
+<div class="history-load">↩ Load</div>
+</div>`;
+}).join('');
+
+list.querySelectorAll('.history-item').forEach(item => {
+item.addEventListener('click', () => {
+const h = loadHistory().find(x => x.id === item.dataset.id);
+if (!h) return;
+clearRoute();
+displayRoute({ geometry: h.geometry, distance: h.distKm * 1000, duration: h.timeMin * 60, legs: [] });
+showToast(`↩ Loaded route from ${new Date(h.date).toLocaleDateString()}`);
+});
+});
+}
+
+async function fetchWindBearing(lat, lng) {
+
+const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}` +
+`&current=wind_speed_10m,wind_direction_10m&wind_speed_unit=kmh&timezone=auto`;
+try {
+const res = await Promise.race([
+fetch(url).then(r => r.json()),
+new Promise((_, rej) => setTimeout(() => rej('timeout'), 3000)),
+]);
+const spd = res.current?.wind_speed_10m ?? 0;
+const dir = res.current?.wind_direction_10m ?? null;
+if (dir === null || spd < 5) return null; // wind too light to matter
+
+const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+const cardinal = dirs[Math.round(dir / 45) % 8];
+return { bearing: dir, cardinal, speed: Math.round(spd) };
+} catch { return null; }
+}
+
+async function fetchAndRenderElevation(coords) {
+if (!isPremium()) return;
+const wrap = document.getElementById('elevation-wrap');
+const area = document.getElementById('elev-chart-area');
+wrap.style.display = 'block';
+area.innerHTML = '<div class="elev-loading">⏳ Loading elevation…</div>';
+
+const step = Math.max(1, Math.floor(coords.length / 80));
+const sampled = coords.filter((_, i) => i % step === 0);
+const locStr  = sampled.map(([lat, lng]) => `${lat.toFixed(5)},${lng.toFixed(5)}`).join('|');
+const url     = `https://api.opentopodata.org/v1/srtm30m?locations=${locStr}`;
+
+try {
+const res = await Promise.race([
+fetch(url).then(r => r.json()),
+new Promise((_, rej) => setTimeout(() => rej('timeout'), 8000)),
+]);
+const elevs = (res.results || []).map(r => r.elevation ?? 0).filter(e => e !== null);
+if (!elevs.length) throw new Error('no data');
+
+let gain = 0;
+for (let i = 1; i < elevs.length; i++) {
+const d = elevs[i] - elevs[i - 1];
+if (d > 0) gain += d;
+}
+const minE = Math.min(...elevs), maxE = Math.max(...elevs);
+
+const W = 280, H = 48;
+const norm = e => H - ((e - minE) / (Math.max(maxE - minE, 1))) * H;
+const pts = elevs.map((e, i) => `${(i / (elevs.length - 1) * W).toFixed(1)},${norm(e).toFixed(1)}`).join(' ');
+const poly = `${pts} ${W},${H} 0,${H}`;
+
+const gradeSegs = elevs.slice(1).map((e, i) => {
+const rise = e - elevs[i];
+const run  = W / (elevs.length - 1);
+const pct  = (rise / run) * 100;
+const col  = pct > 4 ? '#ef4444' : pct > 1.5 ? '#f59e0b' : '#22c55e';
+const x1 = (i / (elevs.length - 1) * W).toFixed(1);
+const x2 = ((i + 1) / (elevs.length - 1) * W).toFixed(1);
+return `<line x1="${x1}" y1="${norm(elevs[i]).toFixed(1)}" x2="${x2}" y2="${norm(e).toFixed(1)}" stroke="${col}" stroke-width="2" stroke-linecap="round"/>`;
+}).join('');
+
+document.getElementById('elev-stats-label').innerHTML =
+`<strong>↑ ${Math.round(gain)}m</strong> · ${Math.round(minE)}–${Math.round(maxE)}m`;
+
+area.innerHTML = `
+<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:44px;display:block">
+<defs>
+<linearGradient id="eg" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="#38bdf8" stop-opacity="0.25"/>
+<stop offset="100%" stop-color="#38bdf8" stop-opacity="0.03"/>
+</linearGradient>
+</defs>
+<polygon points="${poly}" fill="url(#eg)"/>
+${gradeSegs}
+</svg>
+<div style="display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:3px">
+<span style="color:#22c55e">▬ Flat</span><span style="color:#f59e0b">▬ Moderate</span><span style="color:#ef4444">▬ Steep</span>
+</div>`;
+} catch {
+area.innerHTML = '<div class="elev-loading" style="color:var(--muted)">Elevation data unavailable</div>';
+}
+}
+
+
+
+
+async function planRoute() {
+const btn = document.getElementById('route-btn');
+if (!state.startLatLng) { showToast('⚠️ Set a start location first'); return; }
+if (!state.endLatLng) { showToast('⚠️ Set an end location first'); return; }
+
+btn.innerHTML = '<span class="spinner"></span> Routing…';
+btn.disabled  = true;
+clearRoute();
+
+const start         = state.startLatLng;
+const end           = state.endLatLng;
+const traffic       = state.trafficLevel || 'low';
+const isHighTraffic = traffic === 'high';
+const isModTraffic  = traffic === 'moderate';
+
+try {
+let waypointStr;
+
+if (isHighTraffic) {
+const midLat        = (start.lat + end.lat) / 2;
+const midLng        = (start.lng + end.lng) / 2;
+const directBearing = Math.atan2(end.lng - start.lng, end.lat - start.lat) * 180 / Math.PI;
+const perpBearing   = (directBearing + 90 + 360) % 360;
+const distKm        = haversineKm(start.lat, start.lng, end.lat, end.lng);
+const mid           = destinationPoint(midLat, midLng, perpBearing, distKm * 0.18);
+waypointStr = `${start.lng},${start.lat};${mid.lng},${mid.lat};${end.lng},${end.lat}`;
+} else {
+waypointStr = `${start.lng},${start.lat};${end.lng},${end.lat}`;
+}
+
+const url = `https://router.project-osrm.org/route/v1/bicycle/${waypointStr}` +
+`?overview=full&geometries=geojson&alternatives=true&steps=true`;
+
+const data = await fetch(url).then(r => r.json());
+if (!data.routes || !data.routes.length) throw new Error('No route');
+// Override OSRM duration with leisure cycling speed (OSRM uses athletic pace)
+const p2pSpeed = ({ low: 15, moderate: 13, high: 11 })[traffic] || CYCLING_SPEED_KMH;
+const route = data.routes[0];
+route.duration = (route.distance / 1000 / p2pSpeed) * 3600;
+displayRoute(route);
+addToHistory(route, 'p2p');
+fetchAndRenderElevation(route.geometry.coordinates.map(([lng, lat]) => [lat, lng]));
+
+if (isHighTraffic) {
+showToast('🛡 Rush hour — routed via quieter residential streets', 4000);
+} else if (isModTraffic) {
+showToast('⚡ Moderate traffic — using bike-friendly side streets', 3500);
+}
+
+} catch (err) {
+showToast('⚠️ Could not find route – check your connection');
+console.error(err);
+} finally {
+btn.innerHTML = '➡️ Find Route';
+btn.disabled  = false;
+}
+}
+
+function displayRoute(route) {
+const coords  = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+const distKm  = (route.distance / 1000).toFixed(1);
+const timeMin = Math.round(route.duration / 60);
+
+state.routeSteps = (route.legs || []).flatMap(leg => leg.steps || []);
+
+state.routeName = `SafeRide Route ${distKm}km`;
+
+const trafficColors = { low: '#22c55e', moderate: '#f59e0b', high: '#ef4444' };
+const routeColor    = trafficColors[state.trafficLevel] || '#22c55e';
+
+state._routeGlow = L.polyline(coords, {
+color: routeColor, weight: 14, opacity: 0.15, interactive: false,
+}).addTo(state.map);
+
+state.routeLayer = L.polyline(coords, {
+color: routeColor, weight: 6, opacity: 0.88, lineCap: 'round', lineJoin: 'round',
+}).addTo(state.map);
+
+state._routeDecorator = L.polylineDecorator(state.routeLayer, {
+patterns: [{
+offset: 60,
+repeat: 120,
+symbol: L.Symbol.arrowHead({
+pixelSize: 13,
+polygon: false,
+pathOptions: { stroke: true, weight: 2.5, color: '#ffffff', opacity: 0.9 },
+}),
+}],
+}).addTo(state.map);
+
+state.map.fitBounds(state.routeLayer.getBounds(), { padding: [40, 40] });
+
+const dogsNearby = countHazardsNearRoute(coords);
+
+document.getElementById('stat-dist').textContent = `${distKm} km`;
+document.getElementById('stat-time').textContent = `${timeMin} min`;
+document.getElementById('stat-dogs').textContent = dogsNearby > 0 ? `⚠️ ${dogsNearby}` : '✓ 0';
+document.getElementById('route-stats-wrap').style.display = 'block';
+
+document.getElementById('stat-type-badge').textContent = '➡️ Point to point';
+
+const pill = document.getElementById('budget-pill');
+const diff = timeMin - state.timeBudget;
+pill.style.display = 'block';
+if (diff <= 0) {
+pill.style.background = 'rgba(34,197,94,0.15)';
+pill.style.color = 'var(--green)';
+pill.textContent = `✓ Fits your ${formatDuration(state.timeBudget)} budget — ${formatDuration(Math.abs(diff))} to spare`;
+} else if (diff <= state.timeBudget * 0.25) {
+pill.style.background = 'rgba(245,158,11,0.15)';
+pill.style.color = 'var(--yellow)';
+pill.textContent = `⚠️ ${formatDuration(diff)} over your ${formatDuration(state.timeBudget)} budget`;
+} else {
+pill.style.background = 'rgba(239,68,68,0.15)';
+pill.style.color = 'var(--red)';
+pill.textContent = `✗ ${formatDuration(diff)} over budget — try a closer destination`;
+}
+
+const ti     = computeTrafficLevel();
+const score  = computeRouteScore(ti.score, dogsNearby);
+const offset = CIRCUMFERENCE * (1 - score / 100);
+document.getElementById('score-arc').style.strokeDashoffset = offset;
+document.getElementById('score-num').textContent = score;
+
+if (dogsNearby > 0) {
+showToast(`⚠️ ${dogsNearby} dog hazard${dogsNearby > 1 ? 's' : ''} near your route!`, 4000);
+} else {
+showToast(`✅ Route found — ${distKm} km, ~${timeMin} min`);
+}
+// Fetch nearby bike paths if not already loaded for this start location
+// (autocomplete already fetches; this handles the case of a restored/cached start)
+if (state.startLatLng) {
+  const pathsList = document.getElementById('bike-paths-list');
+  const alreadyLoaded = pathsList && pathsList.querySelector('.bp-item, .bp-map-note');
+  if (!alreadyLoaded) fetchNearbyBikePaths(state.startLatLng.lat, state.startLatLng.lng);
+}
+}
+
+function countHazardsNearRoute(coords) {
+if (!state.hazards.length) return 0;
+let count = 0;
+const THRESHOLD_M = 200; // within 200 m of route
+
+state.hazards.forEach(h => {
+const hPt = turf.point([h.lng, h.lat]);
+for (let i = 0; i < coords.length - 1; i++) {
+const seg  = turf.lineString([[coords[i][1], coords[i][0]], [coords[i+1][1], coords[i+1][0]]]);
+const dist = turf.nearestPointOnLine(seg, hPt).properties.dist * 1000; // km → m
+if (dist < THRESHOLD_M) { count++; break; }
+}
+});
+return count;
+}
+
+function clearRoute() {
+if (state.routeLayer)      { state.map.removeLayer(state.routeLayer);      state.routeLayer      = null; }
+if (state._routeGlow)      { state.map.removeLayer(state._routeGlow);      state._routeGlow      = null; }
+if (state._routeDecorator) { state.map.removeLayer(state._routeDecorator); state._routeDecorator = null; }
+state.routeSteps = [];
+state.routeName  = '';
+document.getElementById('route-stats-wrap').style.display = 'none';
+document.getElementById('budget-pill').style.display = 'none';
+document.getElementById('stat-type-badge').textContent = '';
+const _elevWrap = document.getElementById('elevation-wrap');
+_elevWrap.style.display = 'none';
+document.getElementById('elev-chart-area').innerHTML = '<div class="elev-loading">Loading elevation…</div>';
+document.getElementById('elev-stats-label').textContent = '';
+}
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+const R = 6371;
+const dLat = (lat2 - lat1) * Math.PI / 180;
+const dLng = (lng2 - lng1) * Math.PI / 180;
+const a = Math.sin(dLat / 2) ** 2 +
+Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+Math.sin(dLng / 2) ** 2;
+return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function clearBikePaths() {
+if (state.bikePathLayer) { state.map.removeLayer(state.bikePathLayer); state.bikePathLayer = null; }
+state.bikePaths = [];
+}
+
+async function fetchNearbyBikePaths(lat, lng) {
+document.getElementById('bike-paths-list').innerHTML =
+'<div class="bp-loading"><span class="spinner"></span> Searching for nearby paths…</div>';
+clearBikePaths();
+
+const R = 1500; // 1.5 km search radius
+const q = `[out:json][timeout:20];
+(
+way["highway"="cycleway"](around:${R},${lat},${lng});
+way["highway"="path"]["bicycle"~"yes|designated"](around:${R},${lat},${lng});
+way["highway"="footway"]["bicycle"="yes"](around:${R},${lat},${lng});
+way["highway"="track"]["bicycle"~"yes|designated"](around:${R},${lat},${lng});
+relation["route"="bicycle"](around:${R},${lat},${lng});
+);
+out body;>;out skel qt;`;
+
+try {
+const resp = await fetch('https://overpass-api.de/api/interpreter', {
+method: 'POST',
+headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+body: 'data=' + encodeURIComponent(q),
+});
+const data = await resp.json();
+
+const nodeMap = {};
+data.elements.forEach(el => {
+if (el.type === 'node') nodeMap[el.id] = { lat: el.lat, lng: el.lon };
+});
+
+const ways = data.elements
+.filter(el => el.type === 'way' && el.nodes && el.nodes.length >= 2)
+.map(way => {
+const coords = way.nodes.map(id => nodeMap[id]).filter(Boolean);
+const distKm  = Math.min(...coords.map(c => haversineKm(lat, lng, c.lat, c.lng)));
+return { id: way.id, name: way.tags?.name || null,
+type: way.tags?.highway || 'path', coords, distKm, tags: way.tags || {} };
+})
+.filter(w => w.coords.length >= 2 && isFinite(w.distKm))
+.sort((a, b) => a.distKm - b.distKm);
+
+state.bikePaths = ways;
+renderBikePaths(ways, lat, lng);
+} catch {
+document.getElementById('bike-paths-list').innerHTML =
+'<div class="empty-state">⚠️ Could not load nearby paths — check connection</div>';
+}
+}
+
+function renderBikePaths(ways, startLat, startLng) {
+const list = document.getElementById('bike-paths-list');
+
+if (!ways.length) {
+list.innerHTML = '<div class="empty-state">No dedicated bike paths found within 1.5 km</div>';
+return;
+}
+
+state.bikePathLayer = L.layerGroup();
+ways.slice(0, 30).forEach(way => {
+L.polyline(way.coords.map(c => [c.lat, c.lng]), {
+color: '#38bdf8', weight: 3, opacity: 0.65,
+dashArray: '8 5', interactive: false,
+}).addTo(state.bikePathLayer);
+});
+state.bikePathLayer.addTo(state.map);
+
+const typeLabel = { cycleway: 'Cycleway', path: 'Trail', footway: 'Shared Path', track: 'Track' };
+const typeClass  = { cycleway: 'bp-cycleway', path: 'bp-trail', footway: 'bp-footway', track: 'bp-track' };
+
+const top = ways.slice(0, 5);
+list.innerHTML = top.map(w => `
+<div class="bp-item">
+<div class="bp-icon">🚲</div>
+<div class="bp-info">
+<div class="bp-name">${w.name || 'Unnamed ' + (typeLabel[w.type] || 'Path')}</div>
+<div class="bp-meta">
+<span class="bp-badge ${typeClass[w.type] || 'bp-trail'}">${typeLabel[w.type] || 'Path'}</span>
+<span class="bp-dist">${w.distKm < 0.1 ? 'Right next to you' : w.distKm.toFixed(2) + ' km away'}</span>
+</div>
+</div>
+</div>
+`).join('') +
+(ways.length > 5 ? `<div class="bp-more">+${ways.length - 5} more shown on map</div>` : '') +
+`<div class="bp-map-note">── Dashed blue lines show bike paths on the map</div>`;
+
+const nearest = ways[0];
+showToast(
+`🚲 ${ways.length} bike path${ways.length > 1 ? 's' : ''} nearby! Closest: ${nearest.distKm < 0.1 ? 'right next to you' : nearest.distKm.toFixed(2) + ' km away'}`,
+4000
+);
+}
+
+const dogIcons = { low: '🟢', med: '🟡', high: '🔴' };
+const dogColors = { low: '#22c55e', med: '#f59e0b', high: '#ef4444' };
+
+function makeDogMarker(hazard) {
+const icon = L.divIcon({
+html: `<div style="
+background:${dogColors[hazard.severity]};
+border:2px solid #fff;
+border-radius:50% 50% 50% 0;
+transform:rotate(-45deg);
+width:28px;height:28px;
+display:flex;align-items:center;justify-content:center;
+font-size:14px;
+box-shadow:0 2px 6px rgba(0,0,0,0.4)
+"><span style="transform:rotate(45deg)">🐕</span></div>`,
+className: '',
+iconSize:   [28, 28],
+iconAnchor: [14, 28],
+popupAnchor:[0, -30],
+});
+
+const marker = L.marker([hazard.lat, hazard.lng], { icon })
+.bindPopup(`
+<strong>${hazard.name || 'Dog Hazard'}</strong><br>
+Severity: ${dogIcons[hazard.severity]} ${hazard.severity}<br>
+${hazard.notes ? `<em>${hazard.notes}</em>` : ''}
+<br><small style="color:#94a3b8">${new Date(hazard.ts).toLocaleDateString()}</small>
+`)
+.addTo(state.map);
+
+return marker;
+}
+
+function renderHazardList() {
+const list = document.getElementById('hazard-list');
+if (!state.hazards.length) {
+list.innerHTML = '<div class="empty-state">No hazards pinned yet</div>';
+return;
+}
+
+list.innerHTML = state.hazards.map(h => `
+<div class="hazard-item">
+<span class="hicon">🐕</span>
+<div>
+<div class="hname">${h.name || 'Dog Hazard'}</div>
+<div class="hnotes">${h.notes || 'No notes'}</div>
+</div>
+<span class="hazard-sev sev-${h.severity === 'med' ? 'med' : h.severity}">${dogIcons[h.severity]}</span>
+<button class="hazard-del" data-id="${h.id}" title="Remove">✕</button>
+</div>
+`).join('');
+
+list.querySelectorAll('.hazard-del').forEach(btn => {
+btn.addEventListener('click', () => removeHazard(btn.dataset.id));
+});
+}
+
+function addHazard(latlng, name, severity, notes) {
+const hazard = {
+id:       crypto.randomUUID(),
+lat:      latlng.lat,
+lng:      latlng.lng,
+name, severity, notes,
+ts:       Date.now(),
+};
+state.hazards.push(hazard);
+saveHazards();
+
+const marker = makeDogMarker(hazard);
+state.hazardMarkers.push({ id: hazard.id, marker });
+renderHazardList();
+showToast('🐕 Hazard pinned!');
+}
+
+function removeHazard(id) {
+const idx = state.hazards.findIndex(h => h.id === id);
+if (idx === -1) return;
+state.hazards.splice(idx, 1);
+saveHazards();
+
+const mi = state.hazardMarkers.findIndex(m => m.id === id);
+if (mi !== -1) {
+state.map.removeLayer(state.hazardMarkers[mi].marker);
+state.hazardMarkers.splice(mi, 1);
+}
+renderHazardList();
+}
+
+function onMapClick(e) {
+if (!state.dogMode) return;
+state.pendingHazardLatLng = e.latlng;
+openHazardModal();
+}
+
+function openHazardModal() {
+document.getElementById('hazard-name').value  = '';
+document.getElementById('hazard-notes').value = '';
+setSelectedSeverity('med');
+document.getElementById('hazard-modal').classList.add('open');
+}
+
+function closeHazardModal() {
+document.getElementById('hazard-modal').classList.remove('open');
+state.pendingHazardLatLng = null;
+}
+
+function setSelectedSeverity(sev) {
+state.selectedSeverity = sev;
+document.querySelectorAll('.sev-btn').forEach(btn => {
+btn.className = 'sev-btn';
+if (btn.dataset.sev === sev) btn.classList.add(`sel-${sev}`);
+});
+}
+
+function toggleDogMode() {
+if (!isPremium()) { openPremiumModal(); return; }
+state.dogMode = !state.dogMode;
+const btn    = document.getElementById('dog-mode-btn');
+const banner = document.getElementById('dog-mode-banner');
+
+if (state.dogMode) {
+btn.textContent = '✋ Disable Dog Pin Mode';
+btn.classList.add('active');
+banner.classList.add('visible');
+state.map.getContainer().style.cursor = 'crosshair';
+} else {
+btn.textContent = '🐕 Enable Dog Pin Mode';
+btn.classList.remove('active');
+banner.classList.remove('visible');
+state.map.getContainer().style.cursor = '';
+}
+}
+
+let _toastTimer;
+function showToast(msg, duration = 2500) {
+const el = document.getElementById('toast');
+el.textContent = msg;
+el.classList.add('show');
+clearTimeout(_toastTimer);
+_toastTimer = setTimeout(() => el.classList.remove('show'), duration);
+}
+
+function loadCommunityRoutes() {
+try {
+state.savedRoutes = JSON.parse(localStorage.getItem('cg_routes') || '[]');
+} catch { state.savedRoutes = []; }
+try {
+state.likedIds = new Set(JSON.parse(localStorage.getItem('cg_liked') || '[]'));
+} catch { state.likedIds = new Set(); }
+}
+
+function persistCommunityRoutes() {
+const userRoutes = state.savedRoutes.filter(r => !r.isCommunity);
+localStorage.setItem('cg_routes', JSON.stringify(userRoutes));
+}
+
+function persistLikes() {
+localStorage.setItem('cg_liked', JSON.stringify([...state.likedIds]));
+}
+
+function saveCurrentRoute(name, author, note) {
+if (!state.routeLayer) return;
+const lls    = state.routeLayer.getLatLngs();
+const coords = lls.map(ll => [ll.lat, ll.lng]);
+const distTxt = document.getElementById('stat-dist').textContent;
+const timeTxt = document.getElementById('stat-time').textContent;
+
+const route = {
+id: crypto.randomUUID(),
+name:    name   || 'My Route',
+author:  author || 'Anonymous',
+note:    note   || '',
+coords,
+distKm:  parseFloat(distTxt) || 0,
+timeMin: parseInt(timeTxt)   || 0,
+routeType:    state.routeType,
+trafficLevel: state.trafficLevel,
+likes:    0,
+isCommunity: false,
+ts: Date.now(),
+};
+
+if (author) localStorage.setItem('cg_author', author);
+
+state.savedRoutes.push(route);
+persistCommunityRoutes();
+drawCommunityRoutes();
+renderCommunityList(state.communityTab);
+showToast('⭐ Route shared with the community!', 3500);
+}
+
+function likeRoute(id) {
+const route = state.savedRoutes.find(r => r.id === id);
+if (!route) return;
+
+if (state.likedIds.has(id)) {
+state.likedIds.delete(id);
+route.likes = Math.max(0, route.likes - 1);
+} else {
+state.likedIds.add(id);
+route.likes++;
+}
+persistLikes();
+if (!route.isCommunity) persistCommunityRoutes();
+renderCommunityList(state.communityTab);
+}
+
+function zoomToRoute(id) {
+const route = state.savedRoutes.find(r => r.id === id);
+if (!route || !route.coords.length) return;
+const bounds = L.latLngBounds(route.coords.map(c => [c[0], c[1]]));
+state.map.fitBounds(bounds, { padding: [50, 50] });
+}
+
+function drawCommunityRoutes() {
+if (state.communityLayer) { state.map.removeLayer(state.communityLayer); state.communityLayer = null; }
+if (!state.savedRoutes.length) return;
+
+state.communityLayer = L.layerGroup();
+state.savedRoutes.forEach(route => {
+if (!route.coords || route.coords.length < 2) return;
+const latlngs = route.coords.map(c => [c[0], c[1]]);
+L.polyline(latlngs, { color: '#a855f7', weight: 10, opacity: 0.12, interactive: false })
+.addTo(state.communityLayer);
+L.polyline(latlngs, { color: '#a855f7', weight: 3, opacity: 0.75 })
+.bindPopup(`<strong>${route.name}</strong><br>by @${route.author}<br>${route.distKm} km · ~${route.timeMin} min`)
+.addTo(state.communityLayer);
+});
+state.communityLayer.addTo(state.map);
+}
+
+function renderCommunityList(tab) {
+state.communityTab = tab;
+const list = document.getElementById('community-list');
+const routes = tab === 'mine'
+? state.savedRoutes.filter(r => !r.isCommunity)
+: state.savedRoutes;
+
+document.querySelectorAll('.cr-tab').forEach(b => {
+b.classList.toggle('active', b.dataset.tab === tab);
+});
+
+document.getElementById('cr-count').textContent = `${state.savedRoutes.length} routes`;
+
+if (!routes.length) {
+list.innerHTML = `<div class="cr-empty">
+<div class="cr-empty-icon">🚴</div>
+<div class="cr-empty-text">${tab === 'mine'
+? 'You haven\'t saved any routes yet.<br>Plan a route then hit ⭐ to share it!'
+: 'No community routes here yet.<br>Be the first cyclist in your area to save one!'}</div>
+</div>`;
+return;
+}
+
+const sorted = [...routes].sort((a, b) => b.likes - a.likes);
+
+list.innerHTML = sorted.map(r => {
+const isLiked   = state.likedIds.has(r.id);
+const typeLabel = '➡️ Point to Point';
+return `
+<div class="cr-item" data-id="${r.id}">
+<div class="cr-dot" style="background:#a855f7"></div>
+<div class="cr-body">
+<div class="cr-name">${r.name}</div>
+<div class="cr-meta">
+<span class="cr-chip">@${r.author}</span>
+<span class="cr-chip">${typeLabel}</span>
+</div>
+<div class="cr-stats">${r.distKm} km · ~${r.timeMin} min · ${timeAgo(r.ts)}</div>
+${r.note ? `<div class="cr-note">"${r.note}"</div>` : ''}
+</div>
+<div class="cr-like">
+<button class="cr-like-btn ${isLiked ? 'liked' : ''}" data-like="${r.id}" title="${isLiked ? 'Unlike' : 'Like'}">
+${isLiked ? '❤️' : '🤍'}
+</button>
+<span class="cr-like-count">${r.likes}</span>
+</div>
+</div>`;
+}).join('');
+
+list.querySelectorAll('.cr-item').forEach(el => {
+el.addEventListener('click', e => {
+if (e.target.closest('.cr-like-btn')) return;
+zoomToRoute(el.dataset.id);
+});
+});
+list.querySelectorAll('.cr-like-btn').forEach(btn => {
+btn.addEventListener('click', e => { e.stopPropagation(); likeRoute(btn.dataset.like); });
+});
+}
+
+function timeAgo(ts) {
+const diff = Date.now() - ts;
+const mins = Math.floor(diff / 60000);
+if (mins < 2)   return 'just now';
+if (mins < 60)  return `${mins}m ago`;
+const hrs = Math.floor(mins / 60);
+if (hrs  < 24)  return `${hrs}h ago`;
+const days = Math.floor(hrs / 24);
+return `${days}d ago`;
+}
+
+function openSaveRouteModal() {
+if (!isPremium()) { openPremiumModal(); return; }
+document.getElementById('sr-name').value   = '';
+document.getElementById('sr-note').value   = '';
+document.getElementById('sr-author').value = localStorage.getItem('cg_author') || '';
+const modal = document.getElementById('save-route-modal');
+modal.style.display = 'flex';
+}
+
+function closeSaveRouteModal() {
+document.getElementById('save-route-modal').style.display = 'none';
+}
+
+const DEVICE_INSTRUCTIONS = {
+garmin: {
+label: 'Garmin Edge',
+icon: '🟠',
+steps: [
+'Download the GPX file above.',
+'Open the <strong>Garmin Connect</strong> app on your phone.',
+'Tap <strong>More (☰) → Training &amp; Planning → Courses</strong>.',
+'Tap the <strong>+</strong> button and choose <strong>Import</strong>.',
+'Select the downloaded <code>.gpx</code> file.',
+'Tap <strong>Send to Device</strong> to sync via Bluetooth to your Edge.',
+'On your Edge, navigate to <strong>Navigation → Courses</strong> to start the route.',
+],
+note: 'Compatible with Garmin Edge 130, 530, 830, 1030, 1040, Explore 2, and all newer models.',
+},
+wahoo: {
+label: 'Wahoo ELEMNT',
+icon: '⚡',
+steps: [
+'Download the GPX file above.',
+'Open the <strong>Wahoo ELEMNT</strong> app on your phone.',
+'Tap <strong>Routes</strong> at the bottom navigation bar.',
+'Tap the <strong>+</strong> icon in the top-right corner.',
+'Select <strong>Import from File</strong> and choose the <code>.gpx</code> file.',
+'The route syncs to your ELEMNT automatically over WiFi.',
+'On your ELEMNT, press the power button and select <strong>Routes</strong>.',
+],
+note: 'Compatible with ELEMNT BOLT v1/v2, ELEMNT ROAM v1/v2, and ELEMNT ACE.',
+},
+hammerhead: {
+label: 'Hammerhead Karoo',
+icon: '🔴',
+steps: [
+'Download the GPX file above.',
+'On any browser, go to <strong>app.hammerhead.io</strong> and sign in.',
+'Tap <strong>Routes</strong> in the left sidebar.',
+'Tap <strong>Import Route</strong> and upload the <code>.gpx</code> file.',
+'Ensure your Karoo is connected to WiFi — the route syncs automatically.',
+'On your Karoo, tap <strong>Navigation → Routes</strong> to find it.',
+],
+note: 'Compatible with Hammerhead Karoo 2 and Karoo 3.',
+},
+usb: {
+label: 'USB / Other Devices',
+icon: '🔌',
+steps: [
+'Download the GPX file above.',
+'Connect your bike computer to a computer using its USB cable — it will appear as a USB drive.',
+'Open the drive and locate the folder named <strong>NewFiles</strong>, <strong>Courses</strong>, or <strong>GPX</strong> (name varies by brand).',
+'Copy the downloaded <code>.gpx</code> file into that folder.',
+'Safely eject the device and power-cycle it.',
+'Find the route under <strong>Navigation</strong> or <strong>Courses</strong> on your device.',
+],
+note: 'Works with Polar, Sigma, Bryton, iGPSPORT, CatEye, and most other GPS cycling computers.',
+},
+};
+
+function escapeXML(str) {
+return String(str ?? '')
+.replace(/&/g, '&amp;')
+.replace(/</g, '&lt;')
+.replace(/>/g, '&gt;')
+.replace(/"/g, '&quot;')
+.replace(/'/g, '&apos;');
+}
+
+function buildStepInstruction(step) {
+const type     = step.maneuver?.type     || '';
+const modifier = step.maneuver?.modifier || '';
+const street   = step.name               || 'unnamed road';
+if (type === 'depart')     return `Depart on ${street}`;
+if (type === 'arrive')     return 'Arrive at destination';
+if (type === 'roundabout') return `Enter roundabout, exit onto ${street}`;
+if (type === 'rotary')     return `Enter rotary, exit onto ${street}`;
+if (modifier)              return `${type} ${modifier} onto ${street}`;
+return `Continue onto ${street}`;
+}
+
+function generateGPX() {
+if (!state.routeLayer) return null;
+
+const coords    = state.routeLayer.getLatLngs();
+const routeName = state.routeName || 'SafeRide Route';
+const now       = new Date().toISOString();
+
+const trackPts = coords.map(ll =>
+`        <trkpt lat="${ll.lat.toFixed(7)}" lon="${ll.lng.toFixed(7)}"/>`
+).join('\n');
+
+const routePts = (state.routeSteps || []).map(step => {
+const [lng, lat] = step.maneuver?.location || [0, 0];
+const instruction = buildStepInstruction(step);
+return `    <rtept lat="${lat.toFixed(7)}" lon="${lng.toFixed(7)}">\n` +
+`      <name>${escapeXML(instruction)}</name>\n    </rtept>`;
+}).join('\n');
+
+return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="SafeRide – Safe Cycling Routes"
+xmlns="http://www.topografix.com/GPX/1/1"
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+<metadata>
+<name>${escapeXML(routeName)}</name>
+<desc>Exported from SafeRide – Safe Cycling Routes</desc>
+<time>${now}</time>
+</metadata>
+${routePts ? `  <rte>\n    <name>${escapeXML(routeName)}</name>\n${routePts}\n  </rte>` : ''}
+<trk>
+<name>${escapeXML(routeName)}</name>
+<trkseg>
+${trackPts}
+</trkseg>
+</trk>
+</gpx>`;
+}
+
+function downloadGPX() {
+const gpx = generateGPX();
+if (!gpx) { showToast('⚠️ No route to export'); return; }
+
+const slug = (state.routeName || 'saferide-route')
+.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+const filename = `${slug}-${Date.now()}.gpx`;
+
+const blob = new Blob([gpx], { type: 'application/gpx+xml' });
+const url  = URL.createObjectURL(blob);
+const a    = Object.assign(document.createElement('a'), { href: url, download: filename });
+document.body.appendChild(a);
+a.click();
+document.body.removeChild(a);
+URL.revokeObjectURL(url);
+
+showToast('📥 GPX downloaded — import it to your bike computer', 3500);
+}
+
+function renderExportInstructions(deviceKey) {
+const dev  = DEVICE_INSTRUCTIONS[deviceKey];
+const list = dev.steps.map((s, i) => `
+<li>
+<span class="export-step-num">${i + 1}</span>
+<span>${s}</span>
+</li>`).join('');
+
+document.getElementById('export-instructions').innerHTML = `
+<div class="export-device-name">${dev.icon} ${dev.label}</div>
+<ul class="export-steps-list">${list}</ul>
+<div class="export-compat-note">ℹ️ ${dev.note}</div>`;
+}
+
+function openExportModal() {
+document.getElementById('export-modal').classList.add('open');
+renderExportInstructions('garmin');
+document.querySelectorAll('.export-tab').forEach(b => b.classList.toggle('active', b.dataset.device === 'garmin'));
+}
+
+function closeExportModal() {
+document.getElementById('export-modal').classList.remove('open');
+}
+
+const STAR_LABELS = ['', 'Poor 😕', 'Fair 🙁', 'Good 👍', 'Great 😊', 'Love it! 🤩'];
+let _feedbackRating = 0;
+
+function openFeedbackModal() {
+_feedbackRating = 0;
+document.getElementById('feedback-text').value = '';
+document.getElementById('star-label').textContent = 'Tap a star to rate';
+document.getElementById('feedback-submit').disabled = true;
+document.querySelectorAll('.star-btn').forEach(b => b.classList.remove('active', 'hover'));
+document.getElementById('feedback-modal').classList.add('open');
+}
+
+function closeFeedbackModal() {
+document.getElementById('feedback-modal').classList.remove('open');
+}
+
+function submitFeedback() {
+const rating = _feedbackRating;
+const text   = document.getElementById('feedback-text').value.trim();
+const user   = JSON.parse(localStorage.getItem('cg_user') || '{}');
+const stars  = '★'.repeat(rating) + '☆'.repeat(5 - rating);
+
+const subject = encodeURIComponent(`SafeRide Feedback — ${rating}/5 stars`);
+const body    = encodeURIComponent(
+`Rating: ${stars} (${rating}/5)\n` +
+`From: ${user.name || 'Anonymous'} (${user.handle ? '@' + user.handle : 'no handle'})\n\n` +
+`Feedback:\n${text || '(no message)'}\n\n` +
+`---\nSent from SafeRide – Safe Cycling Routes`
+);
+
+window.location.href = `mailto:${FEEDBACK_EMAIL}?subject=${subject}&body=${body}`;
+closeFeedbackModal();
+showToast('📧 Opening your email app…', 2500);
+}
+
+function bindFeedbackModal() {
+
+const stars = document.querySelectorAll('.star-btn');
+const label = document.getElementById('star-label');
+const submit = document.getElementById('feedback-submit');
+
+stars.forEach(btn => {
+const n = parseInt(btn.dataset.star);
+
+btn.addEventListener('mouseenter', () => {
+stars.forEach(b => b.classList.toggle('hover', parseInt(b.dataset.star) <= n));
+});
+btn.addEventListener('mouseleave', () => {
+stars.forEach(b => b.classList.remove('hover'));
+});
+btn.addEventListener('click', () => {
+_feedbackRating = n;
+stars.forEach(b => b.classList.toggle('active', parseInt(b.dataset.star) <= n));
+label.textContent = STAR_LABELS[n];
+submit.disabled = false;
+});
+});
+
+document.getElementById('feedback-submit').addEventListener('click', submitFeedback);
+document.getElementById('feedback-cancel').addEventListener('click', closeFeedbackModal);
+
+document.getElementById('feedback-modal').addEventListener('click', e => {
+if (e.target === document.getElementById('feedback-modal')) closeFeedbackModal();
+});
+}
+
+const TUTORIAL_STEPS = [
+{
+icon: '🚲',
+title: 'Welcome to SafeRide!',
+desc: 'Your personal cycling safety companion.\nLet\'s take a quick tour so you can hit the road safely.',
+},
+{
+icon: '📍',
+title: 'Set Your Location',
+desc: 'Tap the 📍 button to use GPS, or type any address in the Start Location field to set where your ride begins.',
+},
+{
+icon: '📍',
+title: 'Set Your Destination',
+desc: 'Type an address in the End Location field — or tap anywhere on the map — to set where you\'re headed.\n\nSafeRide routes you along bike-friendly roads from A to B.',
+},
+{
+icon: '⏱',
+title: 'Set a Time Budget',
+desc: 'Drag the slider to set how long you have.\nAfter routing, SafeRide compares your actual ride time against your budget so you know if you\'re on track.',
+},
+{
+icon: '🛡',
+title: 'Traffic Safety Scores',
+desc: '🟢 Green = light traffic — perfect for riding.\n🟡 Yellow = moderate — stay alert.\n🔴 Red = rush hour.\n\nRoutes automatically shift to quieter residential streets when traffic is high.',
+},
+{
+icon: '🐕',
+title: 'Dog Hazard Pins',
+desc: 'Enable Dog Pin Mode, then tap anywhere on the map to mark a house with an aggressive dog.\n\nHazards are saved and warned about on future routes.',
+},
+{
+icon: '⭐',
+title: 'Community Routes',
+desc: 'After a great ride, tap ⭐ Save to share your route with local cyclists.\n\nBrowse what others have saved and ❤️ like your favourites.',
+},
+{
+icon: '🚲',
+title: 'Nearby Bike Paths',
+desc: 'SafeRide automatically finds dedicated bike paths and trails near your start point.\n\nThey\'re shown as dashed blue lines on the map.',
+},
+{
+icon: '✅',
+title: 'You\'re All Set!',
+desc: 'Tap 📍 to detect your location and plan your first safe ride.\n\nHappy cycling! 🎉',
+},
+];
+
+let _tutStep = 0;
+
+const PREMIUM_CODES = ['SAFERIDE-PRO', 'SAFERIDE2026', 'COREVEL-PRO'];
+
+function isPremium() {
+try { return !!JSON.parse(localStorage.getItem('cg_user') || '{}').premium; }
+catch { return false; }
+}
+
+function openPremiumModal() {
+const modal = document.getElementById('premium-modal');
+modal.style.display = 'flex';
+document.getElementById('premium-code-input').value  = '';
+document.getElementById('premium-code-error').textContent = '';
+}
+
+function closePremiumModal() {
+document.getElementById('premium-modal').style.display = 'none';
+}
+
+function applyPremiumCode() {
+const code = document.getElementById('premium-code-input').value.trim().toUpperCase();
+if (PREMIUM_CODES.includes(code)) {
+const user    = JSON.parse(localStorage.getItem('cg_user') || '{}');
+user.premium  = true;
+localStorage.setItem('cg_user', JSON.stringify(user));
+closePremiumModal();
+updatePremiumUI();
+renderFavoriteChips();
+renderHistory();
+showToast('🎉 Premium unlocked! Dog pins, community routes, history & more are now active.', 5000);
+} else {
+document.getElementById('premium-code-error').textContent =
+'⚠️ Invalid code — check your purchase confirmation email.';
+}
+}
+
+function updatePremiumUI() {
+const pro = isPremium();
+const dogBtn     = document.getElementById('dog-mode-btn');
+const saveBtn    = document.getElementById('save-route-btn');
+const dogCard    = document.getElementById('dog-hazard-card');
+const upsellCard = document.getElementById('premium-upsell-card');
+if (dogBtn)     dogBtn.innerHTML  = '🐕 Enable Dog Pin Mode';
+if (saveBtn)    saveBtn.innerHTML = pro
+? '⭐ Save to Community Routes'
+: '🔒 Save to Community Routes <span style="font-size:10px;opacity:.7">(Premium)</span>';
+if (dogCard)    dogCard.style.display    = pro ? '' : 'none';
+if (upsellCard) upsellCard.style.display = pro ? 'none' : '';
+}
+
+function bindPremiumModal() {
+document.getElementById('premium-cancel').addEventListener('click', closePremiumModal);
+document.getElementById('premium-code-btn').addEventListener('click', applyPremiumCode);
+document.getElementById('premium-code-input').addEventListener('keydown', e => {
+if (e.key === 'Enter') applyPremiumCode();
+});
+
+document.getElementById('premium-modal').addEventListener('click', e => {
+if (e.target === document.getElementById('premium-modal')) closePremiumModal();
+});
+}
+
+async function verifyStripeSession(sessionId) {
+try {
+showToast('⏳ Verifying your payment…', 3000);
+const res  = await fetch(`/api/verify-payment?session_id=${encodeURIComponent(sessionId)}`);
+const data = await res.json();
+
+if (data.premium) {
+const user   = JSON.parse(localStorage.getItem('cg_user') || '{}');
+user.premium = true;
+if (data.email && !user.email) user.email = data.email;
+localStorage.setItem('cg_user', JSON.stringify(user));
+updatePremiumUI();
+applyProfileBadge(user);
+renderFavoriteChips();
+renderHistory();
+
+history.replaceState({}, '', '/');
+showToast('🎉 Payment confirmed! Welcome to SafeRide Premium.', 6000);
+} else {
+showToast('⚠️ Payment not confirmed — contact ethan@corevelophysio.com for help.', 6000);
+}
+} catch (err) {
+console.error('Payment verification failed:', err);
+showToast('⚠️ Could not verify payment. Please try again or contact support.', 5000);
+}
+}
+
+function checkOnboarding() {
+
+try {
+const onboarded = localStorage.getItem('cg_onboarded') === '1';
+const user      = JSON.parse(localStorage.getItem('cg_user') || 'null');
+if (onboarded || (user && user.email)) {
+hideOnboarding();
+if (user && user.email) {
+applyProfileBadge(user);
+if (user.handle) localStorage.setItem('cg_author', user.handle);
+}
+return;
+}
+} catch {}
+
+document.getElementById('onboarding-overlay').classList.remove('hidden');
+}
+
+function hideOnboarding() {
+document.getElementById('onboarding-overlay').classList.add('hidden');
+}
+
+function applyProfileBadge(user) {
+const badge  = document.getElementById('profile-badge');
+const avatar = document.getElementById('profile-avatar');
+const initials = (user.name || user.handle || '?')
+.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+avatar.textContent = initials;
+badge.style.display = 'flex';
+
+badge.onclick = (e) => {
+e.stopPropagation();
+const existing = document.getElementById('profile-menu');
+if (existing) { existing.remove(); return; }
+
+const menu = document.createElement('div');
+menu.id = 'profile-menu';
+menu.className = 'profile-menu';
+const savedUser = JSON.parse(localStorage.getItem('cg_user') || '{}');
+const pro = savedUser.premium;
+menu.innerHTML = `
+<div class="profile-menu-info">
+<div class="profile-menu-name">${savedUser.name || 'Cyclist'}${pro ? ' <span style="font-size:10px;background:rgba(56,189,248,0.18);color:var(--accent);padding:1px 6px;border-radius:99px;font-weight:600">PRO</span>' : ''}</div>
+<div class="profile-menu-sub">@${savedUser.handle || '—'} · ${savedUser.email || ''}</div>
+</div>
+${pro
+? '<div style="font-size:12px;color:var(--accent);padding:8px 12px;border-bottom:1px solid var(--border)">✅ Premium active — all features unlocked</div>'
+: '<button class="profile-menu-btn" id="pm-upgrade" style="color:var(--accent);font-weight:600">⭐ Upgrade to Premium</button>'}
+<button class="profile-menu-btn" id="pm-edit">✏️ Edit Profile</button>
+<button class="profile-menu-btn" id="pm-tutorial">🎓 Replay Tutorial</button>
+<button class="profile-menu-btn" id="pm-feedback">⭐ Rate SafeRide</button>
+<button class="profile-menu-btn danger" id="pm-reset">🗑 Reset App</button>
+`;
+badge.appendChild(menu);
+
+if (!pro) {
+document.getElementById('pm-upgrade').onclick = (e) => {
+e.stopPropagation();
+menu.remove();
+openPremiumModal();
+};
+}
+document.getElementById('pm-edit').onclick = (e) => {
+e.stopPropagation();
+menu.remove();
+
+document.getElementById('ob-name').value  = savedUser.name  || '';
+document.getElementById('ob-email').value = savedUser.email || '';
+document.getElementById('ob-handle').value = savedUser.handle || '';
+document.getElementById('ob-consent-check').checked = true;
+document.getElementById('ob-submit').disabled = false;
+document.getElementById('ob-signup').classList.add('active');
+document.getElementById('ob-tutorial').classList.remove('active');
+document.getElementById('onboarding-overlay').classList.remove('hidden');
+};
+document.getElementById('pm-tutorial').onclick = (e) => {
+e.stopPropagation();
+menu.remove();
+_tutStep = 0;
+document.getElementById('ob-signup').classList.remove('active');
+document.getElementById('ob-tutorial').classList.add('active');
+document.getElementById('onboarding-overlay').classList.remove('hidden');
+buildTutorial();
+};
+document.getElementById('pm-feedback').onclick = (e) => {
+e.stopPropagation();
+menu.remove();
+openFeedbackModal();
+};
+document.getElementById('pm-reset').onclick = (e) => {
+e.stopPropagation();
+if (!confirm('Reset SafeRide? This clears your profile, saved routes, and all hazard pins.')) return;
+menu.remove();
+localStorage.clear();
+location.reload();
+};
+
+setTimeout(() => document.addEventListener('click', () => {
+document.getElementById('profile-menu')?.remove();
+}, { once: true }), 0);
+};
+}
+
+function submitSignup() {
+const name   = document.getElementById('ob-name').value.trim();
+const email  = document.getElementById('ob-email').value.trim();
+const handle = document.getElementById('ob-handle').value.trim();
+const errEl  = document.getElementById('ob-error');
+errEl.textContent = '';
+
+if (!document.getElementById('ob-consent-check').checked) {
+errEl.textContent = '⚠️ Please read and accept the Privacy Policy to continue.'; return;
+}
+if (!name)  { errEl.textContent = '⚠️ Please enter your name.'; return; }
+if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+errEl.textContent = '⚠️ Please enter a valid email address.'; return;
+}
+
+const finalHandle = handle || name.split(' ')[0] + 'Rider';
+const user = { name, email, handle: finalHandle, joinDate: Date.now() };
+localStorage.setItem('cg_user', JSON.stringify(user));
+localStorage.setItem('cg_author', finalHandle);
+
+applyProfileBadge(user);
+
+document.getElementById('ob-signup').classList.remove('active');
+document.getElementById('ob-tutorial').classList.add('active');
+buildTutorial();
+}
+
+function buildTutorial() {
+const slidesEl = document.getElementById('ob-slides');
+const dotsEl   = document.getElementById('ob-dots');
+_tutStep = 0;
+
+slidesEl.innerHTML = TUTORIAL_STEPS.map((s, i) => `
+<div class="ob-slide ${i === 0 ? 'active' : ''}" data-step="${i}">
+<div class="ob-slide-icon">${s.icon}</div>
+<div class="ob-slide-title">${s.title}</div>
+<div class="ob-slide-desc">${s.desc}</div>
+</div>`).join('');
+
+dotsEl.innerHTML = TUTORIAL_STEPS.map((_, i) => `
+<div class="ob-dot ${i === 0 ? 'active' : ''}"></div>`).join('');
+
+updateTutNav();
+}
+
+function advanceTutorial() {
+const slides = document.querySelectorAll('.ob-slide');
+const dots   = document.querySelectorAll('.ob-dot');
+const last   = TUTORIAL_STEPS.length - 1;
+
+if (_tutStep === last) { finishTutorial(); return; }
+
+slides[_tutStep].classList.remove('active');
+slides[_tutStep].classList.add('exit');
+const leaving = _tutStep;
+setTimeout(() => slides[leaving]?.classList.remove('exit'), 380);
+
+dots[_tutStep].classList.remove('active');
+_tutStep++;
+slides[_tutStep].classList.add('active');
+dots[_tutStep].classList.add('active');
+updateTutNav();
+}
+
+function updateTutNav() {
+document.getElementById('ob-next').textContent =
+_tutStep === TUTORIAL_STEPS.length - 1 ? '🚀 Start Riding!' : 'Next →';
+}
+
+function finishTutorial() {
+
+localStorage.setItem('cg_onboarded', '1');
+hideOnboarding();
+const user = JSON.parse(localStorage.getItem('cg_user') || '{}');
+showToast(`👋 Welcome, ${user.name || 'Cyclist'}! Tap 📍 to find your location.`, 4000);
+}
+
+function bindOnboardingEvents() {
+
+const nameEl   = document.getElementById('ob-name');
+const handleEl = document.getElementById('ob-handle');
+nameEl.addEventListener('input', () => {
+if (handleEl.dataset.manualEdit) return;
+const first = nameEl.value.trim().split(' ')[0];
+handleEl.value = first ? first + 'Rider' : '';
+});
+handleEl.addEventListener('input', () => { handleEl.dataset.manualEdit = '1'; });
+
+const consentCheck = document.getElementById('ob-consent-check');
+const submitBtn    = document.getElementById('ob-submit');
+consentCheck.addEventListener('change', () => {
+submitBtn.disabled = !consentCheck.checked;
+});
+
+submitBtn.addEventListener('click', submitSignup);
+['ob-name', 'ob-email', 'ob-handle'].forEach(id => {
+document.getElementById(id).addEventListener('keydown', e => {
+if (e.key === 'Enter') submitSignup();
+});
+});
+
+document.getElementById('privacy-link').addEventListener('click', e => {
+e.preventDefault();
+document.getElementById('privacy-modal').classList.add('open');
+});
+document.getElementById('privacy-close').addEventListener('click', () => {
+document.getElementById('privacy-modal').classList.remove('open');
+});
+document.getElementById('privacy-modal').addEventListener('click', e => {
+if (e.target === document.getElementById('privacy-modal'))
+document.getElementById('privacy-modal').classList.remove('open');
+});
+
+document.getElementById('ob-next').addEventListener('click', advanceTutorial);
+document.getElementById('ob-skip').addEventListener('click', finishTutorial);
+}
+
+function initBottomSheet() {
+if (window.innerWidth > 640) return;
+
+const sheet  = document.getElementById('sidebar');
+const handle = document.getElementById('sheet-handle');
+const PEEK_PX = 100; // px of sheet visible in closed (peek) state
+
+let dragStartY   = 0;
+let dragStartTY  = 0; // translateY at touch start
+let isDragging   = false;
+
+function currentTranslateY() {
+const m = new DOMMatrix(window.getComputedStyle(sheet).transform);
+return m.m42;
+}
+
+function peekTranslate() {
+return sheet.offsetHeight - PEEK_PX;
+}
+
+function snapSheet(currentY) {
+
+sheet.style.transition = '';
+sheet.style.transform  = '';
+if (currentY < peekTranslate() * 0.45) {
+sheet.classList.add('sheet-open');
+} else {
+sheet.classList.remove('sheet-open');
+}
+}
+
+handle.addEventListener('touchstart', e => {
+isDragging  = true;
+dragStartY  = e.touches[0].clientY;
+dragStartTY = currentTranslateY();
+sheet.style.transition = 'none';
+}, { passive: true });
+
+window.addEventListener('touchmove', e => {
+if (!isDragging) return;
+const dy  = e.touches[0].clientY - dragStartY;
+const newY = Math.max(0, Math.min(dragStartTY + dy, peekTranslate()));
+sheet.style.transform = `translateY(${newY}px)`;
+}, { passive: true });
+
+window.addEventListener('touchend', () => {
+if (!isDragging) return;
+isDragging = false;
+snapSheet(currentTranslateY());
+}, { passive: true });
+
+handle.addEventListener('click', () => {
+if (sheet.classList.contains('sheet-open')) {
+sheet.classList.remove('sheet-open');
+} else {
+sheet.classList.add('sheet-open');
+}
+});
+
+document.getElementById('route-btn').addEventListener('click', () => {
+setTimeout(() => sheet.classList.add('sheet-open'), 100);
+}, true); // capture phase so it fires even if planRoute stops propagation
+}
+
+function showIOSInstallPrompt() {
+
+const isIOS        = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+const isStandalone = window.navigator.standalone === true
+|| window.matchMedia('(display-mode: standalone)').matches;
+const dismissed    = localStorage.getItem('cg_install_dismissed');
+
+if (!isIOS || isStandalone || dismissed) return;
+
+setTimeout(() => {
+const banner = document.getElementById('ios-install-banner');
+banner.classList.add('visible');
+
+document.getElementById('ios-install-close').addEventListener('click', () => {
+banner.classList.remove('visible');
+localStorage.setItem('cg_install_dismissed', '1');
+});
+}, 2500);
+}
+
+function bindEvents() {
+
+document.getElementById('locate-btn').addEventListener('click', locateUser);
+
+const slider  = document.getElementById('time-slider');
+const display = document.getElementById('time-display');
+slider.addEventListener('input', () => {
+state.timeBudget = parseInt(slider.value);
+display.textContent = formatDuration(state.timeBudget);
+});
+
+document.getElementById('route-btn').addEventListener('click', planRoute);
+
+document.getElementById('clear-route-btn').addEventListener('click', () => {
+clearRoute();
+state.endLatLng = null;
+document.getElementById('end-input').value = '';
+if (state._endMarker) { state.map.removeLayer(state._endMarker); state._endMarker = null; }
+});
+
+bindAutocomplete('start-input', 'start-dropdown', (latlng, name) => {
+state.startLatLng = latlng;
+if (state._startMarker) state.map.removeLayer(state._startMarker);
+state._startMarker = L.circleMarker(latlng, {
+radius: 7, color: '#fff', weight: 2,
+fillColor: '#38bdf8', fillOpacity: 1,
+}).addTo(state.map).bindPopup('🔵 Start');
+state.map.setView(latlng, 13);
+drawTrafficOverlay(latlng, state.trafficLevel || 'low');
+fetchNearbyBikePaths(latlng.lat, latlng.lng);
+});
+
+bindAutocomplete('end-input', 'end-dropdown', (latlng, name) => {
+state.endLatLng = latlng;
+if (state._endMarker) state.map.removeLayer(state._endMarker);
+state._endMarker = L.circleMarker(latlng, {
+radius: 7, color: '#fff', weight: 2,
+fillColor: '#ef4444', fillOpacity: 1,
+}).addTo(state.map).bindPopup('🔴 End');
+});
+
+['start-input', 'end-input'].forEach(id => {
+document.getElementById(id).addEventListener('keydown', e => {
+if (e.key !== 'Enter') return;
+const dd = document.getElementById(id === 'start-input' ? 'start-dropdown' : 'end-dropdown');
+
+if (dd && dd.style.display === 'block') return;
+e.preventDefault();
+planRoute();
+});
+});
+
+document.getElementById('dog-mode-btn').addEventListener('click', toggleDogMode);
+
+document.querySelectorAll('.sev-btn').forEach(btn => {
+btn.addEventListener('click', () => setSelectedSeverity(btn.dataset.sev));
+});
+
+document.getElementById('modal-cancel').addEventListener('click', closeHazardModal);
+document.getElementById('modal-save').addEventListener('click', () => {
+if (!state.pendingHazardLatLng) return;
+addHazard(
+state.pendingHazardLatLng,
+document.getElementById('hazard-name').value.trim(),
+state.selectedSeverity,
+document.getElementById('hazard-notes').value.trim(),
+);
+closeHazardModal();
+});
+
+document.getElementById('hazard-modal').addEventListener('click', e => {
+if (e.target === document.getElementById('hazard-modal')) closeHazardModal();
+});
+
+document.getElementById('save-route-btn').addEventListener('click', openSaveRouteModal);
+
+document.getElementById('sr-cancel').addEventListener('click', closeSaveRouteModal);
+document.getElementById('sr-save').addEventListener('click', () => {
+const name   = document.getElementById('sr-name').value.trim();
+const author = document.getElementById('sr-author').value.trim();
+const note   = document.getElementById('sr-note').value.trim();
+if (!name) { document.getElementById('sr-name').focus(); return; }
+saveCurrentRoute(name, author, note);
+closeSaveRouteModal();
+});
+document.getElementById('save-route-modal').addEventListener('click', e => {
+if (e.target === document.getElementById('save-route-modal')) closeSaveRouteModal();
+});
+
+document.querySelectorAll('.cr-tab').forEach(btn => {
+btn.addEventListener('click', () => renderCommunityList(btn.dataset.tab));
+});
+
+document.getElementById('history-clear-btn').addEventListener('click', () => {
+if (!confirm('Clear your entire route history?')) return;
+saveHistory([]);
+renderHistory();
+showToast('🗑 Route history cleared');
+});
+
+document.getElementById('export-btn').addEventListener('click', openExportModal);
+document.getElementById('export-close').addEventListener('click', closeExportModal);
+document.getElementById('export-modal').addEventListener('click', e => {
+if (e.target === document.getElementById('export-modal')) closeExportModal();
+});
+document.getElementById('gpx-download-btn').addEventListener('click', downloadGPX);
+document.querySelectorAll('.export-tab').forEach(btn => {
+btn.addEventListener('click', () => {
+document.querySelectorAll('.export-tab').forEach(b => b.classList.remove('active'));
+btn.classList.add('active');
+renderExportInstructions(btn.dataset.device);
+});
+});
+
+document.getElementById('sidebar-toggle').addEventListener('click', () => {
+document.getElementById('sidebar').classList.toggle('collapsed');
+});
+}
+
+function boot() {
+
+if ('serviceWorker' in navigator) {
+navigator.serviceWorker.register('/sw.js').then(reg => {
+
+reg.update();
+
+reg.addEventListener('updatefound', () => {
+const newSW = reg.installing;
+newSW.addEventListener('statechange', () => {
+if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+showToast('✨ Update downloading…', 1500);
+}
+});
+});
+}).catch(() => {});
+
+let _reloading = false;
+navigator.serviceWorker.addEventListener('controllerchange', () => {
+if (!_reloading) {
+_reloading = true;
+showToast('✅ SafeRide updated! Reloading…', 1200);
+setTimeout(() => location.reload(), 1400);
+}
+});
+}
+
+initMap();
+initBottomSheet();
+bindEvents();
+bindOnboardingEvents();
+bindFeedbackModal();
+bindPremiumModal();
+checkOnboarding();
+updatePremiumUI();
+document.getElementById('upsell-upgrade-btn').addEventListener('click', openPremiumModal);
+renderFavoriteChips();
+renderHistory();
+
+const _stripeSession = new URLSearchParams(window.location.search).get('session_id');
+if (_stripeSession) verifyStripeSession(_stripeSession);
+
+loadCommunityRoutes();
+drawCommunityRoutes();
+renderCommunityList('all');
+
+state.hazards = loadHazards();
+state.hazards.forEach(h => {
+const marker = makeDogMarker(h);
+state.hazardMarkers.push({ id: h.id, marker });
+});
+renderHazardList();
+
+const ti = computeTrafficLevel();
+updateTrafficUI(ti);
+
+setInterval(() => {
+const ti = computeTrafficLevel();
+updateTrafficUI(ti);
+if (state._lastCenter) drawTrafficOverlay(state._lastCenter, ti.level);
+}, 60_000);
+
+if (navigator.geolocation) {
+navigator.geolocation.getCurrentPosition(
+pos => {
+const { latitude: lat, longitude: lng } = pos.coords;
+state.userLocation = L.latLng(lat, lng);
+state.map.setView([lat, lng], 13);
+state._lastCenter  = [lat, lng];
+state.startLatLng  = state.userLocation;
+
+if (state._userMarker) state.map.removeLayer(state._userMarker);
+state._userMarker = L.circleMarker([lat, lng], {
+radius: 9, color: '#fff', weight: 2,
+fillColor: '#38bdf8', fillOpacity: 1,
+}).addTo(state.map).bindPopup('📍 You are here');
+
+drawTrafficOverlay([lat, lng], ti.level);
+
+reverseGeocode(lat, lng, name => {
+document.getElementById('start-input').value = name;
+});
+
+fetchNearbyBikePaths(lat, lng);
+showToast('📍 Location detected — ready to plan your ride!');
+},
+() => {
+showToast('📍 Enable location for better results');
+},
+{ timeout: 8000 }
+);
+}
+
+state.map.on('moveend', () => {
+const c = state.map.getCenter();
+state._lastCenter = [c.lat, c.lng];
+});
+
+showIOSInstallPrompt();
+}
+
+document.addEventListener('DOMContentLoaded', boot);
+</script>
+</body>
+</html>
