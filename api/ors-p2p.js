@@ -11,9 +11,14 @@ module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const ORS_KEY = process.env.OPENROUTESERVICE_API_KEY;
-  if (!ORS_KEY) return res.status(503).json({ error: 'Routing service not configured' });
+  console.log('ORS key present:', !!ORS_KEY, '| key prefix:', ORS_KEY ? ORS_KEY.slice(0, 8) : 'MISSING');
+  if (!ORS_KEY) {
+    console.error('OPENROUTESERVICE_API_KEY env var is not set');
+    return res.status(503).json({ error: 'Routing service not configured' });
+  }
 
   const { start, end, traffic } = req.body || {};
+  console.log('ORS P2P request:', { start, end, traffic });
 
   if (!Array.isArray(start) || start.length !== 2 ||
       !Array.isArray(end)   || end.length !== 2) {
