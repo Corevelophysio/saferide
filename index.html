@@ -297,6 +297,21 @@
     .bp-footway  { background: rgba(168,85,247,0.15);  color: #a855f7; }
     .bp-track    { background: rgba(245,158,11,0.15);  color: #f59e0b; }
     .bp-dist     { font-size: 11px; color: var(--muted); }
+    .bp-route-btn {
+      flex-shrink: 0;
+      padding: 5px 9px;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      background: rgba(56,189,248,0.1);
+      color: var(--accent);
+      cursor: pointer;
+      white-space: nowrap;
+      align-self: center;
+      transition: background 0.15s;
+    }
+    .bp-route-btn:active { background: rgba(56,189,248,0.25); }
     .bp-more     { font-size: 11px; color: var(--muted); text-align: center; padding-top: 6px; }
     .bp-map-note {
       display: flex;
@@ -1706,6 +1721,12 @@
         </label>
 
         <button class="btn btn-primary ob-submit" id="ob-submit" disabled>Create Profile →</button>
+        <button type="button" id="ob-skip-signup" style="
+          display:block;width:100%;margin-top:8px;padding:10px;
+          background:transparent;border:none;color:var(--muted);
+          font-size:13px;cursor:pointer;text-decoration:underline;
+          text-underline-offset:2px;
+        ">Continue without an account</button>
         <p class="ob-terms">🔒 No account servers. No marketing emails. No data sharing. Ever.</p>
       </div>
     </div>
@@ -1883,6 +1904,7 @@ routeSteps: [],      // OSRM turn-by-turn steps for GPX export
 routeName: '',
 bikePathLayer: null,
 bikePaths: [],
+nearbyBikePaths: [],
 communityLayer: null,
 savedRoutes: [],
 likedIds: new Set(),
@@ -2604,7 +2626,8 @@ const typeLabel = { cycleway: 'Cycleway', path: 'Trail', footway: 'Shared Path',
 const typeClass  = { cycleway: 'bp-cycleway', path: 'bp-trail', footway: 'bp-footway', track: 'bp-track' };
 
 const top = ways.slice(0, 5);
-list.innerHTML = top.map(w => `
+state.nearbyBikePaths = top;
+list.innerHTML = top.map((w, i) => `
 <div class="bp-item">
 <div class="bp-icon">🚲</div>
 <div class="bp-info">
@@ -2614,6 +2637,7 @@ list.innerHTML = top.map(w => `
 <span class="bp-dist">${w.distKm < 0.1 ? 'Right next to you' : w.distKm.toFixed(2) + ' km away'}</span>
 </div>
 </div>
+<button class="bp-route-btn" onclick="routeToBikePath(${i})">Route here →</button>
 </div>
 `).join('') +
 (ways.length > 5 ? `<div class="bp-more">+${ways.length - 5} more shown on map</div>` : '') +
@@ -2624,6 +2648,30 @@ showToast(
 `🚲 ${ways.length} bike path${ways.length > 1 ? 's' : ''} nearby! Closest: ${nearest.distKm < 0.1 ? 'right next to you' : nearest.distKm.toFixed(2) + ' km away'}`,
 4000
 );
+}
+
+function routeToBikePath(idx) {
+const way = state.nearbyBikePaths[idx];
+if (!way || !way.coords.length) return;
+
+// Find the coord on this path nearest to the start location (or map centre)
+const ref = state.startLatLng || state.map.getCenter();
+let best = way.coords[0];
+let bestDist = Infinity;
+way.coords.forEach(c => {
+  const d = Math.hypot(c.lat - ref.lat, c.lng - ref.lng);
+  if (d < bestDist) { bestDist = d; best = c; }
+});
+
+state.endLatLng = L.latLng(best.lat, best.lng);
+const label = way.name || 'Nearby Bike Path';
+document.getElementById('end-input').value = label;
+
+if (state.startLatLng) {
+  planRoute();
+} else {
+  showToast('📍 End set to ' + label + ' — now set a start location!', 3500);
+}
 }
 
 const dogIcons = { low: '🟢', med: '🟡', high: '🔴' };
@@ -3309,7 +3357,7 @@ function checkOnboarding() {
 try {
 const onboarded = localStorage.getItem('cg_onboarded') === '1';
 const user      = JSON.parse(localStorage.getItem('cg_user') || 'null');
-if (onboarded || (user && user.email)) {
+if (onboarded || user) {
 hideOnboarding();
 if (user && user.email) {
 applyProfileBadge(user);
@@ -3522,6 +3570,7 @@ document.getElementById('privacy-modal').classList.remove('open');
 
 document.getElementById('ob-next').addEventListener('click', advanceTutorial);
 document.getElementById('ob-skip').addEventListener('click', finishTutorial);
+document.getElementById('ob-skip-signup').addEventListener('click', finishTutorial);
 }
 
 function initBottomSheet() {

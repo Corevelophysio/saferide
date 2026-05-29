@@ -2,7 +2,7 @@
 // Caches the app shell and CDN libraries so the UI loads offline.
 // Map tiles, routing and geocoding APIs are always fetched live.
 
-const CACHE_NAME = 'saferide-v25';
+const CACHE_NAME = 'saferide-v26';
 
 const APP_SHELL = [
   '/',
