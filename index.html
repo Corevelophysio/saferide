@@ -2557,29 +2557,48 @@ if (state.bikePathLayer) { state.map.removeLayer(state.bikePathLayer); state.bik
 state.bikePaths = [];
 }
 
+// Overpass API mirrors — tried in order; first success wins
+const OVERPASS_MIRRORS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.openstreetmap.fr/api/interpreter',
+];
+
+async function overpassFetch(query) {
+  for (const url of OVERPASS_MIRRORS) {
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(query),
+      });
+      if (resp.ok) return await resp.json();
+    } catch { /* try next mirror */ }
+  }
+  throw new Error('All Overpass mirrors failed');
+}
+
 async function fetchNearbyBikePaths(lat, lng) {
-document.getElementById('bike-paths-list').innerHTML =
+const listEl = document.getElementById('bike-paths-list');
+listEl.innerHTML =
 '<div class="bp-loading"><span class="spinner"></span> Searching for nearby paths…</div>';
 clearBikePaths();
 
-const R = 1500; // 1.5 km search radius
-const q = `[out:json][timeout:20];
+// 3 km radius — wide enough to catch paths along the whole route corridor.
+// Relations excluded: they can be globe-spanning and cause timeouts.
+const R = 3000;
+const q = `[out:json][timeout:30];
 (
 way["highway"="cycleway"](around:${R},${lat},${lng});
 way["highway"="path"]["bicycle"~"yes|designated"](around:${R},${lat},${lng});
+way["highway"="path"]["foot"!~"yes"]["bicycle"!="no"](around:${R},${lat},${lng});
 way["highway"="footway"]["bicycle"="yes"](around:${R},${lat},${lng});
 way["highway"="track"]["bicycle"~"yes|designated"](around:${R},${lat},${lng});
-relation["route"="bicycle"](around:${R},${lat},${lng});
 );
 out body;>;out skel qt;`;
 
 try {
-const resp = await fetch('https://overpass-api.de/api/interpreter', {
-method: 'POST',
-headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-body: 'data=' + encodeURIComponent(q),
-});
-const data = await resp.json();
+const data = await overpassFetch(q);
 
 const nodeMap = {};
 data.elements.forEach(el => {
@@ -2600,8 +2619,12 @@ type: way.tags?.highway || 'path', coords, distKm, tags: way.tags || {} };
 state.bikePaths = ways;
 renderBikePaths(ways, lat, lng);
 } catch {
-document.getElementById('bike-paths-list').innerHTML =
-'<div class="empty-state">⚠️ Could not load nearby paths — check connection</div>';
+listEl.innerHTML =
+`<div class="empty-state">⚠️ Could not load nearby paths
+<br><button onclick="fetchNearbyBikePaths(${lat},${lng})" style="
+  margin-top:8px;padding:6px 14px;font-size:12px;border-radius:6px;
+  border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;
+">Retry</button></div>`;
 }
 }
 

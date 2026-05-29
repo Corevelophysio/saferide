@@ -2,7 +2,7 @@
 // Caches the app shell and CDN libraries so the UI loads offline.
 // Map tiles, routing and geocoding APIs are always fetched live.
 
-const CACHE_NAME = 'saferide-v26';
+const CACHE_NAME = 'saferide-v27';
 
 const APP_SHELL = [
   '/',
@@ -30,6 +30,8 @@ const NETWORK_ONLY_HOSTS = [
   'router.project-osrm.org',
   'nominatim.openstreetmap.org',
   'overpass-api.de',
+  'overpass.kumi.systems',
+  'overpass.openstreetmap.fr',
 ];
 
 // ── Install ───────────────────────────────────────────────────────────────
