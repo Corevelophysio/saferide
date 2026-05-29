@@ -2502,12 +2502,14 @@ showToast(`⚠️ ${dogsNearby} dog hazard${dogsNearby > 1 ? 's' : ''} near your
 } else {
 showToast(`✅ Route found — ${distKm} km, ~${timeMin} min`);
 }
-// Fetch nearby bike paths if not already loaded for this start location
-// (autocomplete already fetches; this handles the case of a restored/cached start)
+// Fetch nearby bike paths — always refresh after a route is planned so both
+// endpoints are searched (not just whichever was set last via autocomplete).
 if (state.startLatLng) {
-  const pathsList = document.getElementById('bike-paths-list');
-  const alreadyLoaded = pathsList && pathsList.querySelector('.bp-item, .bp-map-note');
-  if (!alreadyLoaded) fetchNearbyBikePaths(state.startLatLng.lat, state.startLatLng.lng);
+  const endLL = state.endLatLng;
+  fetchNearbyBikePaths(
+    state.startLatLng.lat, state.startLatLng.lng,
+    endLL?.lat, endLL?.lng,
+  );
 }
 }
 
@@ -2578,22 +2580,34 @@ async function overpassFetch(query) {
   throw new Error('All Overpass mirrors failed');
 }
 
-async function fetchNearbyBikePaths(lat, lng) {
+async function fetchNearbyBikePaths(lat, lng, endLat, endLng) {
 const listEl = document.getElementById('bike-paths-list');
 listEl.innerHTML =
 '<div class="bp-loading"><span class="spinner"></span> Searching for nearby paths…</div>';
 clearBikePaths();
 
-// 3 km radius — wide enough to catch paths along the whole route corridor.
-// Relations excluded: they can be globe-spanning and cause timeouts.
-const R = 3000;
+// When a full route is set, search 2 km around BOTH endpoints so paths near
+// either the start or destination are surfaced (e.g. Swamp Rabbit Trail near
+// a downtown endpoint while the start is in the suburbs).
+// Single-location searches use a 3 km radius.
+const hasEnd = typeof endLat === 'number' && typeof endLng === 'number';
+const R = hasEnd ? 2000 : 3000;
+
+function areaQueries(types) {
+  const points = [[lat, lng]];
+  if (hasEnd) points.push([endLat, endLng]);
+  return types.flatMap(t => points.map(([la, ln]) => `${t}(around:${R},${la},${ln})`));
+}
+
 const q = `[out:json][timeout:30];
 (
-way["highway"="cycleway"](around:${R},${lat},${lng});
-way["highway"="path"]["bicycle"~"yes|designated"](around:${R},${lat},${lng});
-way["highway"="path"]["foot"!~"yes"]["bicycle"!="no"](around:${R},${lat},${lng});
-way["highway"="footway"]["bicycle"="yes"](around:${R},${lat},${lng});
-way["highway"="track"]["bicycle"~"yes|designated"](around:${R},${lat},${lng});
+${areaQueries([
+  'way["highway"="cycleway"]',
+  'way["highway"="path"]["bicycle"~"yes|designated"]',
+  'way["highway"="path"]["foot"!~"yes"]["bicycle"!="no"]',
+  'way["highway"="footway"]["bicycle"="yes"]',
+  'way["highway"="track"]["bicycle"~"yes|designated"]',
+]).join(';\n')}
 );
 out body;>;out skel qt;`;
 
@@ -2621,7 +2635,7 @@ renderBikePaths(ways, lat, lng);
 } catch {
 listEl.innerHTML =
 `<div class="empty-state">⚠️ Could not load nearby paths
-<br><button onclick="fetchNearbyBikePaths(${lat},${lng})" style="
+<br><button onclick="fetchNearbyBikePaths(${lat},${lng},${endLat ?? 'undefined'},${endLng ?? 'undefined'})" style="
   margin-top:8px;padding:6px 14px;font-size:12px;border-radius:6px;
   border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;
 ">Retry</button></div>`;
