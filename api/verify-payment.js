@@ -6,7 +6,7 @@ const Stripe = require('stripe');
 
 module.exports = async (req, res) => {
   // CORS — allow same-origin Vercel domain
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Origin', 'https://saferide-cycling.vercel.app');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Content-Type', 'application/json');
 
